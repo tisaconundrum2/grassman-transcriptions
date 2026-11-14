@@ -7,6 +7,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 ffmpeg git \
     && rm -rf /var/lib/apt/lists/*
 
+# Use soundfile for audio decoding (torchcodec needs libnvrtc which isn't in the runtime image)
+ENV DATASETS_AUDIO_DECODER=soundfile
+
 # Python deps
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
