@@ -2,9 +2,9 @@ name: Train & Export ONNX
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    tags:
+      - 'train-*'
+      - 'v*'
   workflow_dispatch:
     inputs:
       max_samples:
