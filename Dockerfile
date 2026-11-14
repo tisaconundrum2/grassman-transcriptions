@@ -2,20 +2,15 @@ FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
 
 WORKDIR /app
 
-# System deps for audio
+# System deps for audio + CUDA runtime libs needed by torchcodec
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libsndfile1 ffmpeg git \
+    libsndfile1 ffmpeg git cuda-nvrtc-12-4 \
     && rm -rf /var/lib/apt/lists/*
-
-# Use soundfile for audio decoding (torchcodec needs libnvrtc which isn't in the runtime image)
-ENV DATASETS_AUDIO_DECODER=soundfile
 
 # Python deps
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir onnxruntime onnxscript
-# torchcodec needs libnvrtc (only in devel images), remove it so datasets falls back to soundfile
-RUN pip uninstall -y torchcodec 2>/dev/null || true
 
 # Copy project
 COPY src/ src/
