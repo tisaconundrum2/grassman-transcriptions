@@ -1,0 +1,5 @@
+torch>=2.0
+torchaudio>=2.0
+datasets>=3.0
+soundfile>=0.12
+torchcodec>=0.1
