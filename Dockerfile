@@ -23,17 +23,17 @@ COPY export_onnx.py .
 COPY inference.py .
 
 # Conformer-CTC: Grassmann + ConvModule + two-sided mixing
-# 5K samples, 100 epochs on T4. Health server keeps HF Spaces alive.
-# Batch size 8 to avoid GPU OOM on long clips
+# Full train.clean.100 (~28K samples), 50 epochs on T4
+# Health server on port 7860 keeps HF Spaces alive
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 CMD ["python", "-u", "train_gpu.py", \
-    "--max-samples", "5000", \
-    "--epochs", "100", \
-    "--batch-size", "8", \
+    "--max-samples", "30000", \
+    "--epochs", "50", \
+    "--batch-size", "32", \
     "--layers", "6", \
     "--d-model", "256", \
     "--r-reduced", "32", \
-    "--lr", "1.5e-4", \
+    "--lr", "3e-4", \
     "--ctc", \
     "--conformer", \
     "--two-sided", \
