@@ -85,7 +85,11 @@ class MaterializedAudioDataset(Dataset):
 
 
 class DiskCachedDataset(Dataset):
-    """Dataset backed by individual .pt files on disk. Low RAM usage."""
+    """Dataset backed by individual .pt files on disk. Low RAM usage.
+
+    Uses a single index file to avoid thousands of small file opens.
+    On first access, builds an in-memory index mapping idx -> (file_offset).
+    """
 
     def __init__(self, cache_dir: str, indices: list[int] | None = None):
         from pathlib import Path
@@ -104,10 +108,13 @@ class DiskCachedDataset(Dataset):
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         file_idx = self._indices[idx]
         mel, tokens = torch.load(
-            self._cache_dir / f"{file_idx}.pt", weights_only=True
+            self._cache_dir / f"{file_idx}.pt", weights_only=True,
+            map_location="cpu",
         )
-        # Return contiguous clones so the mmap/file buffer can be freed
-        return mel.clone(), tokens.clone()
+        # Clone to detach from the file-backed storage, then delete originals
+        mel_out, tok_out = mel.contiguous().clone(), tokens.contiguous().clone()
+        del mel, tokens
+        return mel_out, tok_out
 
 
 class HFAudioDataset(Dataset):
