@@ -37,7 +37,7 @@ class GrassmannConfig:
     weight_decay: float = 1e-2
     batch_size: int = 16
     epochs: int = 30
-    max_seq_len: int = 512
+    max_seq_len: int = 2048  # LibriSpeech clips up to ~30s → ~750 frames after subsampling
 
     # Architecture mode
     use_seq2seq: bool = True  # True = encoder-decoder, False = CTC-only
