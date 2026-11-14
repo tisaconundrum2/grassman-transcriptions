@@ -229,6 +229,33 @@ def main() -> None:
     except Exception as e:
         print(f"  Warning: ONNX export failed: {e}", flush=True)
 
+    # Upload trained artifacts to HF repo (before pausing, or they're lost)
+    try:
+        from huggingface_hub import HfApi
+        space_id = os.environ.get("SPACE_ID")
+        if space_id:
+            api = HfApi()
+            bundle_dir = os.path.join(args.save_dir, "bundle")
+            onnx_dir = os.path.join(args.save_dir, "onnx")
+            if os.path.isdir(bundle_dir):
+                api.upload_folder(
+                    folder_path=bundle_dir,
+                    path_in_repo="trained/bundle",
+                    repo_id=space_id,
+                    repo_type="space",
+                )
+                print(f"  Uploaded model bundle to {space_id}/trained/bundle/", flush=True)
+            if os.path.isdir(onnx_dir):
+                api.upload_folder(
+                    folder_path=onnx_dir,
+                    path_in_repo="trained/onnx",
+                    repo_id=space_id,
+                    repo_type="space",
+                )
+                print(f"  Uploaded ONNX to {space_id}/trained/onnx/", flush=True)
+    except Exception as e:
+        print(f"  Warning: artifact upload failed: {e}", flush=True)
+
     # Auto-pause HF Space to stop billing
     try:
         from huggingface_hub import HfApi
