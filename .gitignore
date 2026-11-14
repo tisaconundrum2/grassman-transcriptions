@@ -11,3 +11,8 @@ model.pt
 !requirements.txt
 .DS_Store
 *.pdf
+
+test_export/
+onnx_export/
+model_bundle/
+checkpoints/
