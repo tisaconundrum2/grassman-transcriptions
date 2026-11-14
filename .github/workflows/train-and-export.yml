@@ -9,11 +9,11 @@ on:
     inputs:
       max_samples:
         description: 'Training samples'
-        default: '200'
+        default: '500'
         type: string
       epochs:
         description: 'Training epochs'
-        default: '10'
+        default: '30'
         type: string
       mode:
         description: 'Model mode'
@@ -26,7 +26,7 @@ on:
 jobs:
   train-and-export:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 330
 
     steps:
       - uses: actions/checkout@v4
@@ -49,8 +49,8 @@ jobs:
         id: params
         run: |
           # Use workflow_dispatch inputs or defaults for push/PR
-          echo "samples=${{ inputs.max_samples || '200' }}" >> "$GITHUB_OUTPUT"
-          echo "epochs=${{ inputs.epochs || '10' }}" >> "$GITHUB_OUTPUT"
+          echo "samples=${{ inputs.max_samples || '500' }}" >> "$GITHUB_OUTPUT"
+          echo "epochs=${{ inputs.epochs || '30' }}" >> "$GITHUB_OUTPUT"
           echo "mode=${{ inputs.mode || 'seq2seq' }}" >> "$GITHUB_OUTPUT"
 
       - name: Run demo (smoke test)
