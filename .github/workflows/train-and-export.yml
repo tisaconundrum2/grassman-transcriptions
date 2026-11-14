@@ -63,7 +63,7 @@ jobs:
             MODE_FLAG="--ctc"
           fi
 
-          python -u train_gpu.py \\
+          python -u train_gpu.py \
             --max-samples ${{ steps.params.outputs.samples }} \
             --epochs ${{ steps.params.outputs.epochs }} \
             --batch-size 8 \
