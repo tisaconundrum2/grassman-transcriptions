@@ -188,6 +188,8 @@ def _stream_and_materialize(
         hop_length=config.hop_length, n_mels=config.n_mels,
     )
 
+    import gc
+
     samples: list[tuple[torch.Tensor, torch.Tensor]] = []
     saved_count = 0
     for i, sample in enumerate(ds):
@@ -195,17 +197,29 @@ def _stream_and_materialize(
             break
         text = sample[text_col].strip()
         audio_array = sample[audio_col]["array"]
-        if len(text) == 0 or len(audio_array) < 1600:
+        # Skip empty, too-short (<0.1s), or too-long (>20s at 16kHz = 320000 samples) clips
+        # Long clips cause massive GPU memory spikes during conv2d forward pass
+        if len(text) == 0 or len(audio_array) < 1600 or len(audio_array) > 320000:
+            del sample, audio_array
             continue
         mel, text = _process_sample(sample, audio_col, text_col, mel_transform, config.sample_rate)
         tokens = tokenizer.encode(text)
         if cache_dir:
             torch.save((mel, tokens), Path(cache_dir) / f"{saved_count}.pt")
             saved_count += 1
+            del mel, tokens
         else:
             samples.append((mel, tokens))
+        del sample, audio_array
         if (i + 1) % 10 == 0:
             print(f"    Processed {i + 1}/{max_samples} samples...")
+        # Periodic GC during caching to prevent RAM buildup from librosa/datasets buffers
+        if cache_dir and (i + 1) % 500 == 0:
+            gc.collect()
+
+    # Explicitly release the streaming dataset and its internal buffers
+    del ds
+    gc.collect()
 
     if cache_dir:
         print(f"  Cached {saved_count} samples to disk at {cache_dir}.")

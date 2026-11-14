@@ -34,6 +34,28 @@ from src.services.tokenizer_service import CharTokenizer
 from src.services.hf_dataset_service import HFDatasetService
 
 
+def _log_memory(label: str) -> None:
+    """Log system and GPU memory usage."""
+    try:
+        import resource
+        # maxrss is in bytes on macOS, KB on Linux
+        rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # Linux returns KB, macOS returns bytes
+        if sys.platform == "darwin":
+            rss_mb = rss_kb / 1024 / 1024
+        else:
+            rss_mb = rss_kb / 1024
+        print(f"  [mem] {label}: RSS={rss_mb:.0f}MB", end="", flush=True)
+    except Exception:
+        print(f"  [mem] {label}: RSS=unknown", end="", flush=True)
+    if torch.cuda.is_available():
+        alloc = torch.cuda.memory_allocated() / 1e6
+        reserved = torch.cuda.memory_reserved() / 1e6
+        print(f"  GPU_alloc={alloc:.0f}MB  GPU_reserved={reserved:.0f}MB", flush=True)
+    else:
+        print(flush=True)
+
+
 def print_device_info() -> None:
     if torch.cuda.is_available():
         gpu = torch.cuda.get_device_name(0)
@@ -134,6 +156,13 @@ def main() -> None:
         cache_dir=cache_dir,
     ).clean().preprocess().split()
 
+    # Force cleanup after dataset caching (streaming buffers, librosa, etc.)
+    import gc
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    _log_memory("After dataset load")
+
     # Model
     model_ctrl = ModelController(config, tokenizer)
     model_ctrl.build()
@@ -151,11 +180,14 @@ def main() -> None:
     best_val_loss = float("inf")
     start_time = time.time()
 
+    _log_memory("Before training")
+
     for epoch in range(1, args.epochs + 1):
         epoch_start = time.time()
 
         train_loss = model_ctrl.trainer.train_epoch(train_loader)
         val_loss = model_ctrl.trainer.validate(val_loader)
+        gc.collect()
 
         # Step LR scheduler
         scheduler = model_ctrl.trainer.scheduler
