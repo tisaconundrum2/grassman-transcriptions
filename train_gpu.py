@@ -18,9 +18,14 @@ Local override:
 
 import argparse
 import os
+import sys
 import time
 
 import torch
+
+# Force unbuffered output so CI shows progress in real-time
+os.environ["PYTHONUNBUFFERED"] = "1"
+sys.stdout.reconfigure(line_buffering=True)
 
 from src.models.config import GrassmannConfig
 from src.controllers.pipeline_controller import PipelineController
@@ -43,14 +48,14 @@ def decode_samples(model_ctrl: ModelController, dataset: HFDatasetService, n: in
     assert model_ctrl.trainer is not None
     assert dataset._val_ds is not None
 
-    print("\n  Sample transcriptions:")
+    print("\n  Sample transcriptions:", flush=True)
     for i in range(min(n, len(dataset._val_ds))):
         mel, tokens = dataset._val_ds[i]
         # Decode prediction
         pred_text = model_ctrl.predict(mel)
         # Decode ground truth
         gt_text = model_ctrl.tokenizer.decode(tokens)
-        print(f"    [{i}] GT:   '{gt_text}'")
+        print(f"    [{i}] GT:   '{gt_text}'", flush=True)
         print(f"    [{i}] PRED: '{pred_text}'")
     print()
 
@@ -148,7 +153,7 @@ def main() -> None:
         print(f"  Epoch {epoch:3d}/{args.epochs}  |  "
               f"train: {train_loss:.4f}  val: {val_loss:.4f}  "
               f"lr: {lr:.2e}  "
-              f"({elapsed:.1f}s, total: {total_elapsed/60:.1f}min)")
+              f"({elapsed:.1f}s, total: {total_elapsed/60:.1f}min)", flush=True)
 
         # Save best model
         if val_loss < best_val_loss:
@@ -156,7 +161,7 @@ def main() -> None:
             path = os.path.join(args.save_dir, "best_model.pt")
             assert model_ctrl.nn_model is not None
             torch.save(model_ctrl.nn_model.state_dict(), path)
-            print(f"    → Saved best model (val_loss={val_loss:.4f})")
+            print(f"    → Saved best model (val_loss={val_loss:.4f})", flush=True)
 
         # Periodic checkpoint
         if epoch % 10 == 0:

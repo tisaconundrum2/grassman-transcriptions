@@ -67,8 +67,9 @@ class Seq2SeqTrainingService:
         self.model.train()
         total_loss = 0.0
         n_batches = 0
+        total_batches = len(train_loader)
 
-        for mels, tokens, mel_lengths, token_lengths in train_loader:
+        for batch_idx, (mels, tokens, mel_lengths, token_lengths) in enumerate(train_loader):
             mels = mels.to(self.device)
             tokens = tokens.to(self.device)
 
@@ -87,6 +88,11 @@ class Seq2SeqTrainingService:
                 self.optimizer.step()
                 total_loss += loss.item()
                 n_batches += 1
+
+            # Log every 10 batches for CI visibility
+            if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == total_batches:
+                avg = total_loss / max(n_batches, 1)
+                print(f"    batch {batch_idx+1}/{total_batches}  loss: {avg:.4f}", flush=True)
 
         return total_loss / max(n_batches, 1)
 
