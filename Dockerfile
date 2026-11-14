@@ -23,9 +23,9 @@ COPY export_onnx.py .
 COPY inference.py .
 
 # Conformer-CTC: Grassmann + ConvModule + two-sided mixing
-# 5000 samples, 50 epochs on T4. Estimated cost ~$0.20-0.40
+# Full train.clean.100 (~28K samples), 50 epochs on T4. Estimated cost ~$8-9
 CMD ["python", "-u", "train_gpu.py", \
-    "--max-samples", "5000", \
+    "--max-samples", "30000", \
     "--epochs", "50", \
     "--batch-size", "32", \
     "--layers", "6", \
@@ -36,4 +36,4 @@ CMD ["python", "-u", "train_gpu.py", \
     "--conformer", \
     "--two-sided", \
     "--save-dir", "checkpoints", \
-    "--decode-every", "10"]
+    "--decode-every", "5"]
