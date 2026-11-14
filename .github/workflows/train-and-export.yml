@@ -9,11 +9,11 @@ on:
     inputs:
       max_samples:
         description: 'Training samples'
-        default: '50'
+        default: '200'
         type: string
       epochs:
         description: 'Training epochs'
-        default: '5'
+        default: '10'
         type: string
       mode:
         description: 'Model mode'
@@ -26,7 +26,7 @@ on:
 jobs:
   train-and-export:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
@@ -49,8 +49,8 @@ jobs:
         id: params
         run: |
           # Use workflow_dispatch inputs or defaults for push/PR
-          echo "samples=${{ inputs.max_samples || '50' }}" >> "$GITHUB_OUTPUT"
-          echo "epochs=${{ inputs.epochs || '5' }}" >> "$GITHUB_OUTPUT"
+          echo "samples=${{ inputs.max_samples || '200' }}" >> "$GITHUB_OUTPUT"
+          echo "epochs=${{ inputs.epochs || '10' }}" >> "$GITHUB_OUTPUT"
           echo "mode=${{ inputs.mode || 'seq2seq' }}" >> "$GITHUB_OUTPUT"
 
       - name: Run demo (smoke test)
@@ -67,12 +67,12 @@ jobs:
             --max-samples ${{ steps.params.outputs.samples }} \
             --epochs ${{ steps.params.outputs.epochs }} \
             --batch-size 8 \
-            --layers 2 \
-            --d-model 128 \
-            --r-reduced 16 \
-            --decoder-layers 2 \
+            --layers 4 \
+            --d-model 256 \
+            --r-reduced 32 \
+            --decoder-layers 4 \
             --save-dir checkpoints \
-            --decode-every 2 \
+            --decode-every 5 \
             $MODE_FLAG
 
       - name: Save model bundle
@@ -87,8 +87,8 @@ jobs:
 
           # Load best checkpoint and re-save as a proper bundle
           config = GrassmannConfig(
-              n_layers=2, d_model=128, r_reduced=16,
-              n_decoder_layers=2,
+              n_layers=4, d_model=256, r_reduced=32,
+              n_decoder_layers=4,
               use_seq2seq=${{ steps.params.outputs.mode == 'seq2seq' && 'True' || 'False' }},
           )
           tokenizer = CharTokenizer()
@@ -134,7 +134,7 @@ jobs:
           echo "| Mode | ${{ steps.params.outputs.mode }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Samples | ${{ steps.params.outputs.samples }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Epochs | ${{ steps.params.outputs.epochs }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Architecture | 2L enc / 2L dec / d=128 / r=16 |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Architecture | 4L enc / 4L dec / d=256 / r=32 (9.8M params) |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "### Artifacts" >> "$GITHUB_STEP_SUMMARY"
           echo "- **grassmann-model-bundle**: PyTorch weights + config" >> "$GITHUB_STEP_SUMMARY"
