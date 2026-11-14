@@ -187,7 +187,11 @@ def main() -> None:
 
         train_loss = model_ctrl.trainer.train_epoch(train_loader)
         val_loss = model_ctrl.trainer.validate(val_loader)
+
+        # Prevent CUDA memory fragmentation from killing us after many epochs
         gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         # Step LR scheduler
         scheduler = model_ctrl.trainer.scheduler
@@ -198,10 +202,18 @@ def main() -> None:
         elapsed = time.time() - epoch_start
         total_elapsed = time.time() - start_time
 
+        # Log GPU memory if available
+        mem_str = ""
+        if torch.cuda.is_available():
+            alloc = torch.cuda.memory_allocated() / 1e9
+            reserved = torch.cuda.memory_reserved() / 1e9
+            mem_str = f"  GPU: {alloc:.1f}/{reserved:.1f}GB"
+
         print(f"  Epoch {epoch:3d}/{args.epochs}  |  "
               f"train: {train_loss:.4f}  val: {val_loss:.4f}  "
               f"lr: {lr:.2e}  "
-              f"({elapsed:.1f}s, total: {total_elapsed/60:.1f}min)", flush=True)
+              f"({elapsed:.1f}s, total: {total_elapsed/60:.1f}min)"
+              f"{mem_str}", flush=True)
 
         # Save best model
         if val_loss < best_val_loss:
