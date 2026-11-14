@@ -103,9 +103,11 @@ class DiskCachedDataset(Dataset):
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         file_idx = self._indices[idx]
-        return torch.load(
+        mel, tokens = torch.load(
             self._cache_dir / f"{file_idx}.pt", weights_only=True
         )
+        # Return contiguous clones so the mmap/file buffer can be freed
+        return mel.clone(), tokens.clone()
 
 
 class HFAudioDataset(Dataset):
