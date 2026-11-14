@@ -42,6 +42,7 @@ def demo() -> None:
         d_model=128,
         r_reduced=16,
         d_ff=512,
+        n_decoder_layers=2,
         epochs=3,
         batch_size=4,
     )
@@ -62,17 +63,19 @@ def demo() -> None:
 
     mels = torch.randn(batch_size, n_mels, time_steps, device=device)
     tokens = tokenizer.encode("hello world").unsqueeze(0).expand(batch_size, -1)
-    mel_lengths = torch.full((batch_size,), time_steps, dtype=torch.long)
-    token_lengths = torch.full((batch_size,), tokens.shape[1], dtype=torch.long)
 
     # Quick forward pass test
     assert _model.nn_model is not None
-    log_probs = _model.nn_model(mels)
-    print(f"  Forward pass OK — output shape: {log_probs.shape}")
-    print(f"  Expected: (time/4, batch={batch_size}, vocab={config.vocab_size})")
+    if config.use_seq2seq:
+        logits = _model.nn_model(mels, tokens)
+        print(f"  Forward pass OK — output shape: {logits.shape}")
+        print(f"  Expected: (batch={batch_size}, seq={tokens.shape[1]}, vocab={config.vocab_size})")
+    else:
+        log_probs = _model.nn_model(mels)
+        print(f"  Forward pass OK — output shape: {log_probs.shape}")
+        print(f"  Expected: (time/4, batch={batch_size}, vocab={config.vocab_size})")
 
     # Quick decode test
-    assert _model.trainer is not None
     pred_tokens = _model.trainer.greedy_decode(mels[0:1])
     decoded = tokenizer.decode(pred_tokens)
     print(f"  Greedy decode (untrained): '{decoded}'")
