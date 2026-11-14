@@ -67,6 +67,10 @@ def main() -> None:
     parser.add_argument("--d-model", type=int, default=256)
     parser.add_argument("--r-reduced", type=int, default=32)
     parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--decoder-layers", type=int, default=4)
+    parser.add_argument("--cross-window", type=int, default=8)
+    parser.add_argument("--ctc", action="store_true",
+                        help="Use CTC-only mode instead of seq2seq")
     parser.add_argument("--save-dir", default="checkpoints")
     parser.add_argument("--decode-every", type=int, default=5,
                         help="Decode sample transcriptions every N epochs")
@@ -80,7 +84,11 @@ def main() -> None:
     print(f"  Max samples: {args.max_samples or 'full split'}")
     print(f"  Epochs: {args.epochs}")
     print(f"  Batch size: {args.batch_size}")
-    print(f"  Architecture: {args.layers}L / d={args.d_model} / r={args.r_reduced}")
+    mode = "CTC (encoder-only)" if args.ctc else "Seq2Seq (encoder-decoder, fully attention-free)"
+    print(f"  Mode: {mode}")
+    print(f"  Encoder: {args.layers}L / d={args.d_model} / r={args.r_reduced}")
+    if not args.ctc:
+        print(f"  Decoder: {args.decoder_layers}L / cross_window={args.cross_window}")
     print("=" * 60 + "\n")
 
     # Config
@@ -88,9 +96,12 @@ def main() -> None:
         epochs=args.epochs,
         batch_size=args.batch_size,
         n_layers=args.layers,
+        n_decoder_layers=args.decoder_layers,
+        cross_window=args.cross_window,
         d_model=args.d_model,
         r_reduced=args.r_reduced,
         learning_rate=args.lr,
+        use_seq2seq=not args.ctc,
     )
 
     # Dataset

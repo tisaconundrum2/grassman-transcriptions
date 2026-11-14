@@ -18,6 +18,10 @@ class GrassmannConfig:
     d_ff: int = 1024  # 4 * d_model
     dropout: float = 0.1
 
+    # Decoder architecture
+    n_decoder_layers: int = 4
+    cross_window: int = 8  # encoder positions per side for cross-mixing
+
     # Grassmann-specific
     window_offsets: list[int] = field(default_factory=lambda: [1, 2, 4, 8, 12, 16])
     plucker_eps: float = 1e-8
@@ -28,6 +32,9 @@ class GrassmannConfig:
     batch_size: int = 16
     epochs: int = 30
     max_seq_len: int = 512
+
+    # Architecture mode
+    use_seq2seq: bool = True  # True = encoder-decoder, False = CTC-only
 
     # Vocab (set dynamically by tokenizer)
     vocab_size: int = 29  # 26 letters + space + apostrophe + blank

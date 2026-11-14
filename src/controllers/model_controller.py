@@ -14,8 +14,10 @@ import torch
 from src.interfaces import IModel
 from src.models.config import GrassmannConfig
 from src.models.grassmann_model import GrassmannTranscriptionModel
+from src.models.grassmann_seq2seq import GrassmannSeq2SeqModel
 from src.services.tokenizer_service import CharTokenizer
 from src.services.training_service import TrainingService
+from src.services.seq2seq_training_service import Seq2SeqTrainingService
 from src.views.console_view import ConsoleView
 
 
@@ -26,13 +28,18 @@ class ModelController(IModel):
         self.config = config
         self.tokenizer = tokenizer
         self.view = ConsoleView()
-        self.nn_model: GrassmannTranscriptionModel | None = None
-        self.trainer: TrainingService | None = None
+        self.nn_model: GrassmannTranscriptionModel | GrassmannSeq2SeqModel | None = None
+        self.trainer: TrainingService | Seq2SeqTrainingService | None = None
 
     def build(self) -> Self:
         self.config.vocab_size = self.tokenizer.vocab_size
-        self.nn_model = GrassmannTranscriptionModel(self.config)
-        self.trainer = TrainingService(self.nn_model, self.config)
+
+        if self.config.use_seq2seq:
+            self.nn_model = GrassmannSeq2SeqModel(self.config)
+            self.trainer = Seq2SeqTrainingService(self.nn_model, self.config)
+        else:
+            self.nn_model = GrassmannTranscriptionModel(self.config)
+            self.trainer = TrainingService(self.nn_model, self.config)
 
         param_count = sum(p.numel() for p in self.nn_model.parameters())
         self.view.show_model_info(self.config, param_count)

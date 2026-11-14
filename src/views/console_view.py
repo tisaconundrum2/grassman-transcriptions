@@ -13,16 +13,21 @@ class ConsoleView:
     """Simple console-based display for training progress."""
 
     def show_model_info(self, config: GrassmannConfig, param_count: int) -> None:
+        mode = "Seq2Seq (Encoder-Decoder)" if config.use_seq2seq else "CTC (Encoder-only)"
         print("\n" + "=" * 60)
-        print("  Grassmann Transcription Model")
+        print(f"  Grassmann Transcription Model — {mode}")
         print("=" * 60)
-        print(f"  Layers:         {config.n_layers}")
+        print(f"  Encoder layers: {config.n_layers}")
+        if config.use_seq2seq:
+            print(f"  Decoder layers: {config.n_decoder_layers}")
+            print(f"  Cross window:   {config.cross_window}")
         print(f"  d_model:        {config.d_model}")
         print(f"  r_reduced:      {config.r_reduced}")
         print(f"  Plücker dim:    {config.plucker_dim}")
         print(f"  Window offsets: {config.window_offsets}")
         print(f"  Vocab size:     {config.vocab_size}")
         print(f"  Parameters:     {param_count:,}")
+        print(f"  Attention:      NONE (fully Grassmann)")
         print("=" * 60 + "\n")
 
     def on_epoch_end(self, metrics: TrainMetrics) -> None:
