@@ -12,7 +12,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir onnxruntime onnxscript
 # Pin datasets to version that supports soundfile decoder (newer versions require torchcodec + libnvrtc)
-RUN pip install --no-cache-dir 'datasets<4'
+# librosa needed by datasets<4 for audio decoding, soundfile for the backend
+RUN pip install --no-cache-dir 'datasets<4' librosa soundfile
 
 # Copy project
 COPY src/ src/
