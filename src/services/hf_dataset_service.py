@@ -84,6 +84,30 @@ class MaterializedAudioDataset(Dataset):
         return self.samples[idx]
 
 
+class DiskCachedDataset(Dataset):
+    """Dataset backed by individual .pt files on disk. Low RAM usage."""
+
+    def __init__(self, cache_dir: str, indices: list[int] | None = None):
+        from pathlib import Path
+        self._cache_dir = Path(cache_dir)
+        # If indices provided, use subset; otherwise use all files
+        if indices is not None:
+            self._indices = indices
+        else:
+            self._indices = sorted(
+                int(f.stem) for f in self._cache_dir.glob("*.pt")
+            )
+
+    def __len__(self) -> int:
+        return len(self._indices)
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        file_idx = self._indices[idx]
+        return torch.load(
+            self._cache_dir / f"{file_idx}.pt", weights_only=True
+        )
+
+
 class HFAudioDataset(Dataset):
     """Wraps a (non-streaming) HuggingFace dataset split into a PyTorch Dataset."""
 
@@ -136,10 +160,25 @@ def _stream_and_materialize(
     text_col: str,
     tokenizer: CharTokenizer,
     config: GrassmannConfig,
-) -> list[tuple[torch.Tensor, torch.Tensor]]:
-    """Stream a HF dataset and materialize only max_samples into memory.
-    Downloads only the rows we need -- no multi-GB parquet shard downloads."""
+    cache_dir: str | None = None,
+) -> list[tuple[torch.Tensor, torch.Tensor]] | str:
+    """Stream a HF dataset and save processed samples.
+
+    If cache_dir is set, saves each (mel, tokens) pair as a .pt file on disk
+    and returns the cache_dir path (low RAM). Otherwise materializes into a list
+    in memory (original behavior).
+    """
+    from pathlib import Path
     from datasets import load_dataset
+
+    # Check if cache already exists
+    if cache_dir:
+        cache_path = Path(cache_dir)
+        existing = list(cache_path.glob("*.pt"))
+        if existing:
+            print(f"  Found {len(existing)} cached samples in {cache_dir}, skipping stream.")
+            return cache_dir
+        cache_path.mkdir(parents=True, exist_ok=True)
 
     print(f"  Streaming {max_samples} samples from '{split}'...")
     ds = load_dataset(dataset_name, config_name, split=split, streaming=True)
@@ -149,7 +188,8 @@ def _stream_and_materialize(
         hop_length=config.hop_length, n_mels=config.n_mels,
     )
 
-    samples = []
+    samples: list[tuple[torch.Tensor, torch.Tensor]] = []
+    saved_count = 0
     for i, sample in enumerate(ds):
         if i >= max_samples:
             break
@@ -159,12 +199,20 @@ def _stream_and_materialize(
             continue
         mel, text = _process_sample(sample, audio_col, text_col, mel_transform, config.sample_rate)
         tokens = tokenizer.encode(text)
-        samples.append((mel, tokens))
+        if cache_dir:
+            torch.save((mel, tokens), Path(cache_dir) / f"{saved_count}.pt")
+            saved_count += 1
+        else:
+            samples.append((mel, tokens))
         if (i + 1) % 10 == 0:
             print(f"    Processed {i + 1}/{max_samples} samples...")
 
-    print(f"  Materialized {len(samples)} samples into memory.")
-    return samples
+    if cache_dir:
+        print(f"  Cached {saved_count} samples to disk at {cache_dir}.")
+        return cache_dir
+    else:
+        print(f"  Materialized {len(samples)} samples into memory.")
+        return samples
 
 
 class HFDatasetService(IDataset):
@@ -187,6 +235,7 @@ class HFDatasetService(IDataset):
         self._hf_val = None
         self._hf_test = None
         self._materialized: list[tuple[torch.Tensor, torch.Tensor]] | None = None
+        self._cache_dir: str | None = None
         self._train_ds: Dataset | None = None
         self._val_ds: Dataset | None = None
         self._test_ds: Dataset | None = None
@@ -194,7 +243,8 @@ class HFDatasetService(IDataset):
     def load(self, dataset_name: str, config_name: str | None = None,
              split: str | None = None, audio_col: str | None = None,
              text_col: str | None = None, streaming: bool = False,
-             max_samples: int | None = None) -> Self:
+             max_samples: int | None = None,
+             cache_dir: str | None = None) -> Self:
         from datasets import load_dataset
 
         self.dataset_name = dataset_name
@@ -205,10 +255,15 @@ class HFDatasetService(IDataset):
         # When max_samples is set, stream to avoid downloading everything
         if max_samples is not None:
             train_split = split or "train"
-            self._materialized = _stream_and_materialize(
+            result = _stream_and_materialize(
                 dataset_name, config_name, train_split, max_samples,
                 self.audio_col, self.text_col, self.tokenizer, self.config,
+                cache_dir=cache_dir,
             )
+            if isinstance(result, str):
+                self._cache_dir = result
+            else:
+                self._materialized = result
             return self
 
         # Full download mode
@@ -252,7 +307,20 @@ class HFDatasetService(IDataset):
         return self
 
     def split(self, train_ratio: float = 0.8, val_ratio: float = 0.1) -> Self:
-        if self._materialized is not None:
+        if self._cache_dir is not None:
+            # Disk-cached mode: split by file indices
+            from pathlib import Path
+            all_indices = sorted(
+                int(f.stem) for f in Path(self._cache_dir).glob("*.pt")
+            )
+            n = len(all_indices)
+            n_train = max(1, int(n * train_ratio))
+            n_val = max(1, int(n * val_ratio))
+            self._train_ds = DiskCachedDataset(self._cache_dir, all_indices[:n_train])
+            self._val_ds = DiskCachedDataset(self._cache_dir, all_indices[n_train:n_train + n_val])
+            rest = all_indices[n_train + n_val:]
+            self._test_ds = DiskCachedDataset(self._cache_dir, rest if rest else all_indices[n_train:n_train + n_val])
+        elif self._materialized is not None:
             samples = self._materialized
             n = len(samples)
             n_train = max(1, int(n * train_ratio))

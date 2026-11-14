@@ -123,13 +123,15 @@ def main() -> None:
         conv_kernel_size=args.conv_kernel,
     )
 
-    # Dataset
+    # Dataset — use disk cache to avoid system RAM OOM on large datasets
+    cache_dir = os.path.join(args.save_dir, "mel_cache")
     tokenizer = CharTokenizer()
     dataset = HFDatasetService(config, tokenizer)
     dataset.load(
         args.dataset,
         split=args.split,
         max_samples=args.max_samples,
+        cache_dir=cache_dir,
     ).clean().preprocess().split()
 
     # Model

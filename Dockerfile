@@ -23,11 +23,11 @@ COPY export_onnx.py .
 COPY inference.py .
 
 # Conformer-CTC: Grassmann + ConvModule + two-sided mixing
-# 15K samples from train.clean.100, 50 epochs on T4
-# Batch size 8 to avoid GPU OOM, 15K to avoid system RAM OOM (16GB limit)
+# Full train.clean.100 (~28K samples), 50 epochs on T4
+# Batch size 8 to avoid GPU OOM. Disk-cached mel spectrograms to avoid RAM OOM.
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 CMD ["python", "-u", "train_gpu.py", \
-    "--max-samples", "15000", \
+    "--max-samples", "30000", \
     "--epochs", "50", \
     "--batch-size", "8", \
     "--layers", "6", \
