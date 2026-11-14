@@ -145,8 +145,8 @@ def main() -> None:
         conv_kernel_size=args.conv_kernel,
     )
 
-    # Dataset — use disk cache to avoid system RAM OOM on large datasets
-    cache_dir = os.path.join(args.save_dir, "mel_cache")
+    # Dataset — use disk cache for large datasets (>8K), in-memory for smaller
+    cache_dir = os.path.join(args.save_dir, "mel_cache") if args.max_samples > 8000 else None
     tokenizer = CharTokenizer()
     dataset = HFDatasetService(config, tokenizer)
     dataset.load(
