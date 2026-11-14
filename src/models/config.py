@@ -25,6 +25,12 @@ class GrassmannConfig:
     # Grassmann-specific
     window_offsets: list[int] = field(default_factory=lambda: [1, 2, 4, 8, 12, 16])
     plucker_eps: float = 1e-8
+    two_sided: bool = False  # True for CTC/encoder (bidirectional)
+
+    # Conformer options
+    use_conformer: bool = False  # True = Conformer blocks, False = plain Grassmann
+    conv_kernel_size: int = 31   # ConvModule kernel size
+    conv_channels: int = 256     # Subsampling conv channels
 
     # Training
     learning_rate: float = 3e-4
@@ -35,6 +41,10 @@ class GrassmannConfig:
 
     # Architecture mode
     use_seq2seq: bool = True  # True = encoder-decoder, False = CTC-only
+
+    # Tokenizer
+    tokenizer_type: str = "char"  # "char" or "bpe"
+    bpe_vocab_size: int = 1000    # BPE vocab size if tokenizer_type="bpe"
 
     # Vocab (set dynamically by tokenizer)
     vocab_size: int = 29  # 26 letters + space + apostrophe + blank

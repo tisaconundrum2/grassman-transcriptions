@@ -76,6 +76,12 @@ def main() -> None:
     parser.add_argument("--cross-window", type=int, default=8)
     parser.add_argument("--ctc", action="store_true",
                         help="Use CTC-only mode instead of seq2seq")
+    parser.add_argument("--conformer", action="store_true",
+                        help="Use Conformer blocks (ConvModule + Macaron FFN)")
+    parser.add_argument("--two-sided", action="store_true",
+                        help="Use bidirectional Grassmann mixing (for CTC/encoder)")
+    parser.add_argument("--conv-kernel", type=int, default=31,
+                        help="ConvModule kernel size")
     parser.add_argument("--save-dir", default="checkpoints")
     parser.add_argument("--decode-every", type=int, default=5,
                         help="Decode sample transcriptions every N epochs")
@@ -90,8 +96,13 @@ def main() -> None:
     print(f"  Epochs: {args.epochs}")
     print(f"  Batch size: {args.batch_size}")
     mode = "CTC (encoder-only)" if args.ctc else "Seq2Seq (encoder-decoder, fully attention-free)"
+    block_type = "Conformer" if args.conformer else "Plain Grassmann"
+    mix_dir = "two-sided" if args.two_sided else "causal"
     print(f"  Mode: {mode}")
+    print(f"  Blocks: {block_type} ({mix_dir} mixing)")
     print(f"  Encoder: {args.layers}L / d={args.d_model} / r={args.r_reduced}")
+    if args.conformer:
+        print(f"  ConvModule kernel: {args.conv_kernel}")
     if not args.ctc:
         print(f"  Decoder: {args.decoder_layers}L / cross_window={args.cross_window}")
     print("=" * 60 + "\n")
@@ -107,6 +118,9 @@ def main() -> None:
         r_reduced=args.r_reduced,
         learning_rate=args.lr,
         use_seq2seq=not args.ctc,
+        use_conformer=args.conformer,
+        two_sided=args.two_sided,
+        conv_kernel_size=args.conv_kernel,
     )
 
     # Dataset
