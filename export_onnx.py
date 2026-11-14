@@ -16,7 +16,7 @@ Usage:
     python export_onnx.py --model checkpoints/best --output onnx_model/
 
     # Export with custom opset
-    python export_onnx.py --model checkpoints/best --output onnx_model/ --opset 17
+    python export_onnx.py --model checkpoints/best --output onnx_model/ --opset 18
 
     # Verify exported model
     python export_onnx.py --model checkpoints/best --output onnx_model/ --verify
@@ -82,7 +82,7 @@ class CTCModelWrapper(torch.nn.Module):
         return logits.log_softmax(dim=-1)
 
 
-def export_seq2seq(model, config, output_dir: str, opset: int = 17) -> None:
+def export_seq2seq(model, config, output_dir: str, opset: int = 18) -> None:
     """Export encoder and decoder as separate ONNX models."""
     model.eval()
     out = Path(output_dir)
@@ -137,7 +137,7 @@ def export_seq2seq(model, config, output_dir: str, opset: int = 17) -> None:
     print(f"    Saved: {out / 'decoder_step.onnx'}")
 
 
-def export_ctc(model, config, output_dir: str, opset: int = 17) -> None:
+def export_ctc(model, config, output_dir: str, opset: int = 18) -> None:
     """Export CTC model as a single ONNX model."""
     model.eval()
     out = Path(output_dir)
@@ -223,7 +223,7 @@ def main():
     parser = argparse.ArgumentParser(description="Export Grassmann model to ONNX")
     parser.add_argument("--model", required=True, help="Path to saved model directory")
     parser.add_argument("--output", default="onnx_export", help="Output directory")
-    parser.add_argument("--opset", type=int, default=17, help="ONNX opset version")
+    parser.add_argument("--opset", type=int, default=18, help="ONNX opset version")
     parser.add_argument("--verify", action="store_true", help="Verify with ONNX Runtime")
     args = parser.parse_args()
 

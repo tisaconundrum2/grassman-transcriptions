@@ -16,3 +16,5 @@ test_export/
 onnx_export/
 model_bundle/
 checkpoints/
+onnx_export/
+test_export/
