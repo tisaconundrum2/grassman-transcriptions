@@ -14,6 +14,8 @@ ENV DATASETS_AUDIO_DECODER=soundfile
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir onnxruntime onnxscript
+# torchcodec needs libnvrtc (only in devel images), remove it so datasets falls back to soundfile
+RUN pip uninstall -y torchcodec 2>/dev/null || true
 
 # Copy project
 COPY src/ src/
