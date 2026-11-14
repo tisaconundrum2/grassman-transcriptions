@@ -23,11 +23,11 @@ COPY export_onnx.py .
 COPY inference.py .
 
 # Conformer-CTC: Grassmann + ConvModule + two-sided mixing
-# Full train.clean.100 (~28K samples), 50 epochs on T4. Estimated cost ~$8-9
-# Batch size 8 to avoid OOM on long clips (T4 has 16GB)
+# 15K samples from train.clean.100, 50 epochs on T4
+# Batch size 8 to avoid GPU OOM, 15K to avoid system RAM OOM (16GB limit)
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 CMD ["python", "-u", "train_gpu.py", \
-    "--max-samples", "30000", \
+    "--max-samples", "15000", \
     "--epochs", "50", \
     "--batch-size", "8", \
     "--layers", "6", \
