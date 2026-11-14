@@ -23,12 +23,12 @@ COPY export_onnx.py .
 COPY inference.py .
 
 # Conformer-CTC: Grassmann + ConvModule + two-sided mixing
-# 3K samples to fit in T4's 16GB system RAM, 150 epochs to compensate
-# Batch size 8, max audio 15s to reduce padding waste
+# 5K samples, 100 epochs on T4. Health server keeps HF Spaces alive.
+# Batch size 8 to avoid GPU OOM on long clips
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 CMD ["python", "-u", "train_gpu.py", \
-    "--max-samples", "3000", \
-    "--epochs", "150", \
+    "--max-samples", "5000", \
+    "--epochs", "100", \
     "--batch-size", "8", \
     "--layers", "6", \
     "--d-model", "256", \

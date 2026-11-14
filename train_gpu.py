@@ -20,12 +20,35 @@ import argparse
 import os
 import sys
 import time
+import threading
 
 import torch
 
 # Force unbuffered output so CI shows progress in real-time
 os.environ["PYTHONUNBUFFERED"] = "1"
 sys.stdout.reconfigure(line_buffering=True)
+
+
+def _start_health_server(port: int = 7860) -> None:
+    """Start a minimal HTTP server so HF Spaces doesn't kill us for not responding.
+    HF Spaces expects a web server on port 7860 and kills containers that don't
+    respond to health checks after ~30 minutes."""
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"Training in progress...")
+
+        def log_message(self, format, *args):
+            pass  # Suppress access logs
+
+    server = HTTPServer(("0.0.0.0", port), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    print(f"  Health server on port {port} (keeps HF Spaces alive)", flush=True)
 
 from src.models.config import GrassmannConfig
 from src.controllers.pipeline_controller import PipelineController
@@ -108,6 +131,9 @@ def main() -> None:
     parser.add_argument("--decode-every", type=int, default=5,
                         help="Decode sample transcriptions every N epochs")
     args = parser.parse_args()
+
+    # Keep HF Spaces alive — it kills containers that don't serve HTTP after ~30 min
+    _start_health_server()
 
     print("\n" + "=" * 60)
     print("  Grassmann Transcription — GPU Training")
