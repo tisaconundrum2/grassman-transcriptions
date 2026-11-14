@@ -206,9 +206,9 @@ def _stream_and_materialize(
             break
         text = sample[text_col].strip()
         audio_array = sample[audio_col]["array"]
-        # Skip empty, too-short (<0.1s), or too-long (>20s at 16kHz = 320000 samples) clips
-        # Long clips cause massive GPU memory spikes during conv2d forward pass
-        if len(text) == 0 or len(audio_array) < 1600 or len(audio_array) > 320000:
+        # Skip empty, too-short (<0.1s), or too-long (>15s at 16kHz = 240000 samples) clips
+        # Long clips cause massive padding waste in collate_fn
+        if len(text) == 0 or len(audio_array) < 1600 or len(audio_array) > 240000:
             del sample, audio_array
             continue
         mel, text = _process_sample(sample, audio_col, text_col, mel_transform, config.sample_rate)
