@@ -194,6 +194,38 @@ def main() -> None:
     # Final decode
     decode_samples(model_ctrl, dataset, n=5)
 
+    # Save model bundle for export
+    try:
+        from src.services.model_hub_service import save_model
+        assert model_ctrl.nn_model is not None
+        save_model(model_ctrl.nn_model, config, os.path.join(args.save_dir, "bundle"))
+        print("  Model bundle saved.", flush=True)
+    except Exception as e:
+        print(f"  Warning: model bundle save failed: {e}", flush=True)
+
+    # Export ONNX if possible
+    try:
+        from export_onnx import export_seq2seq, export_ctc
+        onnx_dir = os.path.join(args.save_dir, "onnx")
+        if config.use_seq2seq:
+            export_seq2seq(model_ctrl.nn_model, config, onnx_dir)
+        else:
+            export_ctc(model_ctrl.nn_model, config, onnx_dir)
+        print(f"  ONNX exported to {onnx_dir}/", flush=True)
+    except Exception as e:
+        print(f"  Warning: ONNX export failed: {e}", flush=True)
+
+    # Auto-pause HF Space to stop billing
+    try:
+        from huggingface_hub import HfApi
+        space_id = os.environ.get("SPACE_ID")
+        if space_id:
+            api = HfApi()
+            api.pause_space(space_id)
+            print(f"  Space {space_id} paused to stop billing.", flush=True)
+    except Exception as e:
+        print(f"  Note: could not auto-pause Space: {e}", flush=True)
+
 
 if __name__ == "__main__":
     main()

@@ -117,15 +117,22 @@ class GrassmannSeq2SeqModel(nn.Module):
 
     @torch.no_grad()
     def greedy_decode(
-        self, mel: torch.Tensor, max_len: int = 200, eos_id: int = 0
+        self,
+        mel: torch.Tensor,
+        max_len: int = 200,
+        eos_id: int = 0,
+        repetition_penalty: float = 1.5,
+        no_repeat_ngram: int = 3,
     ) -> torch.Tensor:
         """
-        Autoregressive greedy decoding.
+        Autoregressive greedy decoding with repetition suppression.
 
         Args:
-            mel:     (1, n_mels, time) - single mel spectrogram
-            max_len: maximum output length
-            eos_id:  end-of-sequence token ID
+            mel:                (1, n_mels, time) - single mel spectrogram
+            max_len:            maximum output length
+            eos_id:             end-of-sequence token ID
+            repetition_penalty: penalize tokens that already appeared (>1.0 to suppress)
+            no_repeat_ngram:    block any n-gram that already occurred
 
         Returns:
             (seq_len,) - predicted token indices
@@ -147,9 +154,26 @@ class GrassmannSeq2SeqModel(nn.Module):
 
             # Decode
             logits = self.decoder(dec_input, encoder_out)  # (1, t, vocab)
+            next_logits = logits[0, -1, :]  # (vocab,)
 
-            # Take the last position's prediction
-            next_token = logits[0, -1, :].argmax().item()
+            # Repetition penalty: reduce logits for tokens already generated
+            if repetition_penalty != 1.0:
+                for prev_token in set(generated):
+                    if next_logits[prev_token] > 0:
+                        next_logits[prev_token] /= repetition_penalty
+                    else:
+                        next_logits[prev_token] *= repetition_penalty
+
+            # No-repeat n-gram blocking
+            if no_repeat_ngram > 0 and len(generated) >= no_repeat_ngram:
+                # Check if any token would create a repeated n-gram
+                ngram_prefix = generated[-(no_repeat_ngram - 1):]
+                for i in range(len(generated) - no_repeat_ngram + 1):
+                    if generated[i:i + no_repeat_ngram - 1] == ngram_prefix:
+                        blocked_token = generated[i + no_repeat_ngram - 1]
+                        next_logits[blocked_token] = float("-inf")
+
+            next_token = next_logits.argmax().item()
             generated.append(next_token)
 
             if next_token == eos_id:
