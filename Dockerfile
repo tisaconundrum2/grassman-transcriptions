@@ -27,9 +27,9 @@ COPY inference.py .
 # Health server on port 7860 keeps HF Spaces alive
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 CMD ["python", "-u", "train_gpu.py", \
-    "--max-samples", "5", \
-    "--epochs", "1", \
-    "--batch-size", "2", \
+    "--max-samples", "30000", \
+    "--epochs", "50", \
+    "--batch-size", "32", \
     "--layers", "6", \
     "--d-model", "256", \
     "--r-reduced", "32", \
@@ -38,4 +38,4 @@ CMD ["python", "-u", "train_gpu.py", \
     "--conformer", \
     "--two-sided", \
     "--save-dir", "checkpoints", \
-    "--decode-every", "1"]
+    "--decode-every", "5"]

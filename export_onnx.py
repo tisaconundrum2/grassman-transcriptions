@@ -84,6 +84,7 @@ class CTCModelWrapper(torch.nn.Module):
 
 def export_seq2seq(model, config, output_dir: str, opset: int = 18) -> None:
     """Export encoder and decoder as separate ONNX models."""
+    model = model.cpu()
     model.eval()
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -139,6 +140,7 @@ def export_seq2seq(model, config, output_dir: str, opset: int = 18) -> None:
 
 def export_ctc(model, config, output_dir: str, opset: int = 18) -> None:
     """Export CTC model as a single ONNX model."""
+    model = model.cpu()
     model.eval()
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
