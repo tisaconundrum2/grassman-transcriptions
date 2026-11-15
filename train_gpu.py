@@ -307,24 +307,22 @@ def main() -> None:
         bundle_dir = os.path.join(args.save_dir, "bundle")
         onnx_dir = os.path.join(args.save_dir, "onnx")
 
-        # Upload model bundle (config + weights + tokenizer)
+        # Upload config + tokenizer from bundle (skip model.pt — same as best_model.pt)
         if os.path.isdir(bundle_dir):
-            urls = upload_directory(bundle_dir, prefix="bundle")
-            print(f"  Uploaded {len(urls)} bundle files to UploadThing", flush=True)
+            for fname in ["config.json", "tokenizer_info.json"]:
+                fpath = os.path.join(bundle_dir, fname)
+                if os.path.isfile(fpath):
+                    upload_file(fpath, custom_id=f"bundle/{fname}")
 
         # Upload ONNX model
         if os.path.isdir(onnx_dir):
             urls = upload_directory(onnx_dir, prefix="onnx")
             print(f"  Uploaded {len(urls)} ONNX files to UploadThing", flush=True)
 
-        # Also upload best_model.pt directly as a safety net
+        # Upload best_model.pt (the only weights file we need)
         best_path = os.path.join(args.save_dir, "best_model.pt")
         if os.path.isfile(best_path):
             upload_file(best_path, custom_id="best_model.pt")
-
-        final_path_check = os.path.join(args.save_dir, "final_model.pt")
-        if os.path.isfile(final_path_check):
-            upload_file(final_path_check, custom_id="final_model.pt")
     except Exception as e:
         print(f"  Warning: UploadThing upload failed: {e}", flush=True)
 
