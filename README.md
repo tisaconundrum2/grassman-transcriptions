@@ -57,3 +57,7 @@ src/
 app.py                  # CLI entry point
 train_gpu.py            # GPU training script (for Spaces)
 ```
+
+## License
+
+MIT, see [LICENSE](LICENSE). Data and third-party code keep their own licenses.

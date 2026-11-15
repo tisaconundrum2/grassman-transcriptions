@@ -1,49 +1,66 @@
 # Next Steps Plan
 
-## Current Run (Smol - 11M)
-- **Status**: Training on full train.clean.100 (~28K samples, 100 hours)
+## Completed Run (Smol - 11M)
+- **Status**: COMPLETE — 50 epochs on train.clean.100 (~28K samples, 100 hours)
 - **Config**: 6L Conformer-CTC, d=256, r=32, batch 32, lr 3e-4, 50 epochs
 - **Hardware**: T4-small ($0.40/hr), GPU using only 0.2/0.3 GB of 16 GB
-- **Estimated completion**: ~11 hours, ~$4.40
+- **Cost**: ~$4.40
 - **Artifacts**: Auto-uploads ONNX + model bundle to HF repo, then auto-pauses
+- **Results at epoch 45**:
+  - Train loss: 0.071, Val loss: 0.736 (10× gap = significant overfitting on 100h)
+  - Common words solid, proper nouns still weak ("launcelot" → "lancolot")
+  - Phonetic substitutions remain ("custle", "wagte", "whistmonst her")
+  - Sample [2] nearly character-perfect on second half of utterance
+- **Key insight**: Model has unused capacity (memorized 100h). More data would force generalizable features instead of memorization.
 
 ---
 
 ## Iteration 1: Evaluate Smol Results
-- [ ] Compute WER on LibriSpeech test-clean (official benchmark split)
-- [ ] Add beam search decoding (character-level LM) — could cut WER by 30-50%
-- [ ] Compare greedy vs beam search WER
+- [ ] Compute WER on LibriSpeech test-clean using saved Smol checkpoint
+- [ ] Measure greedy WER, then beam search WER (retroactive from checkpoint)
 - [ ] Write up results for LinkedIn post
 
-## Iteration 2: Scale the Model (Medium - 50M)
-Train a larger model on the same data to see how much WER improves with capacity.
+## Iteration 2: Medium + 960h + Beam Search (The Real Run)
+Skip incremental steps — scale model, data, and decoding simultaneously.
 
-| Config | Smol (current) | Medium (next) |
-|--------|---------------|---------------|
+| | Smol (completed) | Medium (next) |
+|--|--|--|
+| Params | 11M | ~50M |
+| Data | 100h | 960h (full LibriSpeech) |
+| Decoding | Greedy | Beam search + LM |
 | d_model | 256 | 512 |
 | Layers | 6 | 12 |
 | r_reduced | 32 | 64 |
-| Params | 11M | ~50M |
-| GPU Est. | 0.3 GB | ~2 GB |
-| Time/Epoch | ~13 min | ~55 min |
-| 50 Epochs | ~11 hrs | ~46 hrs |
-| Cost (T4) | ~$4.40 | ~$18 |
+| Epochs | 50 | 50 (may need fewer — more data = less overfitting) |
+| Time/Epoch | ~13 min | ~2.5 hrs (55 min × ~3× more data) |
+| Total | ~11 hrs | ~125 hrs |
+| Cost | ~$4 (T4) | ~$50 (T4) |
 
-## Iteration 3: Scale the Data (Full LibriSpeech 960h)
-Use all three LibriSpeech training splits — same HF dataset, different splits:
+### Pre-launch TODO (3 pieces of work)
 
+#### 1. Multi-split data loading
+Concatenate all three LibriSpeech training splits:
 ```
-train.clean.100  →  28K samples  (100h)  ← current
+train.clean.100  →  28K samples  (100h)
 train.clean.360  → 104K samples  (360h)
 train.other.500  → 148K samples  (500h)
 ─────────────────────────────────────────
 Total:             280K samples  (960h)
 ```
-
 - [ ] Update `train_gpu.py` to accept multiple splits
 - [ ] Stream and concatenate all three splits
-- [ ] Need disk caching for 280K samples (won't fit in 15 GB RAM)
+- [ ] DiskCachedDataset already exists; need HDF5 single-file cache for 280K samples
 - [ ] Length-sorted bucketing to eliminate padding waste
+
+#### 2. Beam search decoder
+- [ ] Add `beam_decode()` alongside current greedy `predict()`
+- [ ] Use `pyctcdecode` (wraps KenLM, does CTC beam search out of the box)
+- [ ] Train or download a character n-gram LM for English
+- [ ] Beam search is decode-time only — no retraining needed, applies to Smol too
+
+#### 3. WER computation in training loop
+- [ ] Add `jiwer` for proper WER/CER metrics during validation
+- [ ] Log WER alongside loss each epoch
 
 ## Iteration 4: Multi-Dataset Training
 Add normalized external datasets for more acoustic diversity:
