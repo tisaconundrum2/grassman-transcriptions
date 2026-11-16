@@ -18,13 +18,14 @@ RUN pip install --no-cache-dir 'datasets<4' librosa soundfile
 # Copy project
 COPY src/ src/
 COPY app.py .
+COPY recipes.yaml .
 
 # Conformer-CTC: Grassmann + ConvModule + two-sided mixing
-# Downloads pre-cached mels from HF Dataset (no expensive CPU caching on GPU)
-# Health server on port 7860 keeps HF Spaces alive
+# Uses first 28539 cached samples (train.clean.100 = 100h)
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 CMD ["python", "-u", "app.py", "train", \
     "--from-cache", "tisaconundrum/grassmann-mel-cache", \
+    "--max-samples", "28539", \
     "--epochs", "50", \
     "--batch-size", "32", \
     "--layers", "6", \
@@ -34,5 +35,6 @@ CMD ["python", "-u", "app.py", "train", \
     "--ctc", \
     "--conformer", \
     "--two-sided", \
+    "--run-name", "smol-grassmann", \
     "--save-dir", "checkpoints", \
     "--decode-every", "5"]

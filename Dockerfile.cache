@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir 'datasets<4' librosa soundfile huggingface_hub
 # Copy project
 COPY src/ src/
 COPY app.py .
+COPY recipes.yaml .
 
 # Cache 1750h recipe and upload to HF Dataset repo
 # HF_TOKEN must be set as a Space secret for upload
