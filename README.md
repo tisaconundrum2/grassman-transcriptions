@@ -1,13 +1,3 @@
----
-title: Grassmann Transcription
-emoji: 🎵
-colorFrom: purple
-colorTo: blue
-sdk: docker
-app_port: 7860
-suggested_hardware: t4-small
----
-
 # Grassmann Manifold Audio Transcription
 
 **An attention-free speech recognition model using Grassmann flows and Plücker coordinates.**
@@ -33,17 +23,38 @@ CTC loss for alignment-free training on audio transcription.
 python app.py demo
 
 # Train on LibriSpeech (streaming, no huge downloads)
-python app.py train-hf --dataset openslr/librispeech_asr \
+python app.py train --dataset openslr/librispeech_asr \
   --split train.clean.100 --max-samples 500 --epochs 10
 
-# Full GPU training
-python train_gpu.py --epochs 50 --batch-size 32
+# Train from pre-cached mels (fastest — skips caching on GPU)
+python app.py train --from-cache tisaconundrum/grassmann-mel-cache \
+  --epochs 50 --batch-size 32 --ctc --conformer --two-sided
+
+# Cache dataset on CPU, upload to HF Hub
+python app.py cache --recipe 1750h --repo tisaconundrum/grassmann-mel-cache
+
+# Export to ONNX
+python app.py export --model checkpoints/bundle --output onnx_export/ --verify
+
+# Evaluate WER on LibriSpeech test-clean
+python app.py eval --model eval_model/best_model.pt --config eval_model/config.json
+
+# Transcribe audio
+python app.py transcribe --model checkpoints/bundle --audio speech.wav
 ```
+
+## Browser Demo
+
+Try it live: **[tisaconundrum2.github.io/grassman-transcriptions](https://tisaconundrum2.github.io/grassman-transcriptions/)**
+
+Runs entirely in the browser via ONNX + WASM. 11M params, 120x real-time on 16min audio.
 
 ## GPU Training on HF Spaces
 
-This repo is configured as a Docker Space. Attach a T4 or L4 GPU and it will
-automatically train on LibriSpeech clean-100.
+This repo is configured as a Docker Space. The workflow is:
+
+1. **CPU Space** — `python app.py cache --recipe 1750h` streams audio, computes mels, uploads shards to a HF Dataset repo
+2. **GPU Space** — `python app.py train --from-cache <repo>` downloads pre-cached mels and trains immediately (no expensive re-caching)
 
 ## Project Structure
 
@@ -51,11 +62,12 @@ automatically train on LibriSpeech clean-100.
 src/
   interfaces/           # Abstract contracts (IModel, IDataset, etc.)
   models/               # Grassmann architecture (CausalGrassmannLayer, PluckerEncoder)
-  services/             # Audio processing, HF datasets, training loop
+  services/             # Audio, datasets, training, ONNX export, WER eval, upload
   controllers/          # Fluent API orchestration
   views/                # Console output
-app.py                  # CLI entry point
-train_gpu.py            # GPU training script (for Spaces)
+app.py                  # Unified CLI (train, cache, export, eval, transcribe, demo)
+inference_onnx.py       # Standalone ONNX inference (no PyTorch dependency)
+demo/                   # Browser demo (GitHub Pages)
 ```
 
 ## License
