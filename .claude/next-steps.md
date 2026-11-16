@@ -136,12 +136,22 @@ ONNX sizes are ~4x parameter count (fp32) or ~2x (fp16 quantized).
 - [x] DiskCachedDataset (for future large-data runs)
 
 ### TODO
-- [ ] **HDF5 single-file cache** — replace 28K .pt files with one .h5 for large datasets
+- [ ] **Migrate from HF Spaces to HF Jobs** — per-second billing, no health server hack, persistent storage
+  - Spaces bills full GPU rate even during CPU-only caching (~$1 wasted per run)
+  - Jobs: `hf jobs run --flavor t4-small <image> python train_gpu.py ...`
+  - Can split into CPU caching job + GPU training job
+  - Persistent storage means mel cache survives between runs (no re-caching on restart)
+  - No port 7860 health server needed — job just runs to completion
+  - CLI: `brew install hf && hf auth login && hf jobs run ...`
+- [ ] **Pre-computed mel dataset on HF Hub** — upload cached .pt files or HDF5 as an HF dataset
+  - Eliminates caching phase entirely — download pre-computed mels instead of streaming raw audio
+  - One-time cost to generate, reused across all future runs
+- [ ] **HDF5 single-file cache** — replace 340K .pt files with one .h5 for large datasets
 - [ ] **Checkpointing to HF repo** — save best model mid-training (not just at end)
 - [ ] **WER computation** — add jiwer/evaluate for proper WER/CER metrics in training loop
 - [ ] **TensorBoard / W&B logging** — loss curves, LR schedule, sample transcriptions
-- [ ] **Multi-split streaming** — load train.clean.100 + train.clean.360 + train.other.500
-
+- [x] **Multi-split streaming** — load train.clean.100 + train.clean.360 + train.other.500 
+1   
 ---
 
 ## WER Targets
