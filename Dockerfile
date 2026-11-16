@@ -18,16 +18,13 @@ RUN pip install --no-cache-dir 'datasets<4' librosa soundfile
 # Copy project
 COPY src/ src/
 COPY app.py .
-COPY train_gpu.py .
-COPY export_onnx.py .
-COPY inference.py .
 
 # Conformer-CTC: Grassmann + ConvModule + two-sided mixing
-# 1750h multi-dataset (LibriSpeech 960 + GigaSpeech-S + VoxPopuli)
+# Downloads pre-cached mels from HF Dataset (no expensive CPU caching on GPU)
 # Health server on port 7860 keeps HF Spaces alive
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-CMD ["python", "-u", "train_gpu.py", \
-    "--recipe", "1750h", \
+CMD ["python", "-u", "app.py", "train", \
+    "--from-cache", "tisaconundrum/grassmann-mel-cache", \
     "--epochs", "50", \
     "--batch-size", "32", \
     "--layers", "6", \

@@ -478,6 +478,105 @@ class HFDatasetService(IDataset):
         )
         return self
 
+    def load_from_hub_cache(self, repo_id: str, cache_dir: str) -> Self:
+        """Download pre-cached mel shards from a HF Dataset repo and unpack to .pt files.
+
+        Use this to skip expensive CPU caching when mels have already been
+        pre-computed and uploaded via upload_cache().
+        """
+        from pathlib import Path
+        from huggingface_hub import hf_hub_download, list_repo_files
+
+        cache_path = Path(cache_dir)
+        existing = list(cache_path.glob("*.pt"))
+        if existing:
+            print(f"  Found {len(existing)} cached samples in {cache_dir}, skipping download.")
+            self._cache_dir = cache_dir
+            return self
+
+        cache_path.mkdir(parents=True, exist_ok=True)
+        print(f"  Downloading mel cache from {repo_id}...")
+
+        files = list_repo_files(repo_id, repo_type="dataset")
+        shard_files = sorted(f for f in files if f.startswith("shard_") and f.endswith(".pt"))
+        print(f"  Found {len(shard_files)} shards")
+
+        sample_idx = 0
+        for shard_name in shard_files:
+            local_path = hf_hub_download(repo_id, shard_name, repo_type="dataset")
+            shard_data = torch.load(local_path, weights_only=True, map_location="cpu")
+            for mel, tokens in shard_data:
+                torch.save((mel, tokens), cache_path / f"{sample_idx}.pt")
+                sample_idx += 1
+            del shard_data
+            print(f"    Unpacked {shard_name} -> {sample_idx} samples total")
+
+        print(f"  Downloaded and unpacked {sample_idx} samples to {cache_dir}")
+        self._cache_dir = cache_dir
+        return self
+
+    def upload_cache(self, repo_id: str) -> None:
+        """Upload the mel cache directory as shards to a HF Dataset repo.
+
+        Call after load_multi() to persist the cache so GPU training
+        can use load_from_hub_cache() instead of re-streaming.
+        """
+        import json
+        import shutil
+        from pathlib import Path
+        from huggingface_hub import HfApi, create_repo
+
+        assert self._cache_dir is not None, "No cache to upload. Call load_multi() first."
+
+        api = HfApi()
+        try:
+            create_repo(repo_id, repo_type="dataset", exist_ok=True)
+            print(f"  Dataset repo: https://huggingface.co/datasets/{repo_id}")
+        except Exception as e:
+            print(f"  Repo creation note: {e}")
+
+        cache_path = Path(self._cache_dir)
+        pt_files = sorted(cache_path.glob("*.pt"), key=lambda f: int(f.stem))
+        total = len(pt_files)
+        print(f"  Packing {total} samples into shards...")
+
+        shard_dir = cache_path / "_shards"
+        shard_dir.mkdir(exist_ok=True)
+
+        SAMPLES_PER_SHARD = 50000
+        shard_idx = 0
+        shard_data = []
+
+        for i, pt_file in enumerate(pt_files):
+            mel, tokens = torch.load(pt_file, weights_only=True, map_location="cpu")
+            shard_data.append((mel, tokens))
+
+            if len(shard_data) >= SAMPLES_PER_SHARD or i == total - 1:
+                shard_path = shard_dir / f"shard_{shard_idx:04d}.pt"
+                torch.save(shard_data, shard_path)
+                size_mb = shard_path.stat().st_size / 1e6
+                print(f"    Shard {shard_idx}: {len(shard_data)} samples ({size_mb:.0f} MB)")
+                shard_data = []
+                shard_idx += 1
+
+        metadata = {
+            "total_samples": total,
+            "num_shards": shard_idx,
+            "samples_per_shard": SAMPLES_PER_SHARD,
+        }
+        with open(shard_dir / "metadata.json", "w") as f:
+            json.dump(metadata, f, indent=2)
+
+        print(f"  Uploading {shard_idx} shards to {repo_id}...")
+        api.upload_folder(
+            folder_path=str(shard_dir),
+            repo_id=repo_id,
+            repo_type="dataset",
+            commit_message=f"Upload mel cache: {total} samples in {shard_idx} shards",
+        )
+        print(f"  Upload complete!")
+        shutil.rmtree(shard_dir)
+
     def clean(self) -> Self:
         if self._materialized is not None:
             return self  # already filtered during streaming
