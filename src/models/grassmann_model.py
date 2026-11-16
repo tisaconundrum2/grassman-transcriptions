@@ -18,7 +18,8 @@ import torch.nn.functional as F
 
 from .config import GrassmannConfig
 from .grassmann_layer import CausalGrassmannLayer
-from .conformer_block import GrassmannConformerBlock
+from .ablation_layer import AblationLayer
+from .conformer_block import GrassmannConformerBlock, AblationConformerBlock
 
 
 class ConvFrontend(nn.Module):
@@ -123,13 +124,16 @@ class GrassmannTranscriptionModel(nn.Module):
         )
 
         # Encoder layers
+        ablation = getattr(config, "use_ablation", False)
         if config.use_conformer:
+            block_cls = AblationConformerBlock if ablation else GrassmannConformerBlock
             self.layers = nn.ModuleList(
-                [GrassmannConformerBlock(config) for _ in range(config.n_layers)]
+                [block_cls(config) for _ in range(config.n_layers)]
             )
         else:
+            layer_cls = AblationLayer if ablation else CausalGrassmannLayer
             self.layers = nn.ModuleList(
-                [CausalGrassmannLayer(config, i) for i in range(config.n_layers)]
+                [layer_cls(config, i) for i in range(config.n_layers)]
             )
 
         # CTC output head

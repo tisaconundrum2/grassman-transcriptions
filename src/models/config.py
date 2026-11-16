@@ -32,6 +32,9 @@ class GrassmannConfig:
     conv_kernel_size: int = 31   # ConvModule kernel size
     conv_channels: int = 256     # Subsampling conv channels
 
+    # Ablation: swap Plücker for symmetric products to test if geometry matters
+    use_ablation: bool = False
+
     # Training
     learning_rate: float = 3e-4
     weight_decay: float = 1e-2
