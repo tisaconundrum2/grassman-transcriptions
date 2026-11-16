@@ -86,13 +86,18 @@ def normalize_transcript(text: str) -> str:
 
 ## Model Scaling Ladder
 
-| Tier | Name | Params | d_model | Layers | r | GPU Est. | Time/Epoch | 50 Epochs | Cost |
-|------|------|--------|---------|--------|---|----------|------------|-----------|------|
-| S | Smol | 11M | 256 | 6 | 32 | 0.3 GB | ~13 min | ~11 hrs | ~$4 (T4) |
-| M | Medium | 50M | 512 | 12 | 64 | ~2 GB | ~55 min | ~46 hrs | ~$18 (T4) |
-| L | Large | 100M | 768 | 15 | 96 | ~5 GB | ~2 hrs | ~100 hrs | ~$40 (T4) |
-| XL | X-Large | 200M | 1024 | 18 | 128 | ~10 GB | ~4 hrs | ~200 hrs | ~$80 (T4) |
-| C | Chonker | 500M | 1536 | 24 | 192 | ~30 GB | ~1.5 hrs | ~75 hrs | ~$190 (A100) |
+| Tier | Name | Params | d_model | Layers | r | ONNX Size | GPU Est. | Time/Epoch | 50 Epochs | Cost |
+|------|------|--------|---------|--------|---|-----------|----------|------------|-----------|------|
+| S | Smol | 11M | 256 | 6 | 32 | ~46 MB | 0.3 GB | ~13 min | ~11 hrs | ~$4 (T4) |
+| S+ | Smol+ | 26M | 256 | 15 | 32 | ~105 MB | ~0.8 GB | ~30 min | ~25 hrs | ~$10 (T4) |
+| M | Medium | 50M | 512 | 12 | 64 | ~200 MB | ~2 GB | ~55 min | ~46 hrs | ~$18 (T4) |
+| L | Large | 100M | 768 | 15 | 96 | ~400 MB | ~5 GB | ~2 hrs | ~100 hrs | ~$40 (T4) |
+| XL | X-Large | 200M | 1024 | 18 | 128 | ~800 MB | ~10 GB | ~4 hrs | ~200 hrs | ~$80 (T4) |
+| C | Chonker | 500M | 1536 | 24 | 192 | ~2 GB | ~30 GB | ~1.5 hrs | ~75 hrs | ~$190 (A100) |
+
+Note: Smol+ matches Dhruv's e02 layer count (15L) at our d_model (256). This is a direct
+comparison point: same depth as his 26M attention baseline, same width as our Smol.
+ONNX sizes are ~4x parameter count (fp32) or ~2x (fp16 quantized).
 
 ---
 
