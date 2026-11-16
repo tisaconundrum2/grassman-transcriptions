@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Grassmann ASR — Browser Demo</title>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.0/dist/ort.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #e0e0e0; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 2rem; }
+  h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+  .subtitle { color: #888; font-size: 0.9rem; margin-bottom: 2rem; text-align: center; }
+  .subtitle a { color: #63b3ed; }
+  .controls { display: flex; gap: 1rem; margin-bottom: 2rem; flex-wrap: wrap; justify-content: center; }
+  button { padding: 0.75rem 2rem; border: none; border-radius: 8px; font-size: 1rem; cursor: pointer; transition: all 0.2s; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  #recordBtn { background: #e53e3e; color: white; }
+  #recordBtn:hover:not(:disabled) { background: #c53030; }
+  #recordBtn.recording { background: #38a169; animation: pulse 1s infinite; }
+  #fileBtn { background: #3182ce; color: white; }
+  #fileBtn:hover:not(:disabled) { background: #2b6cb0; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+  .status { color: #888; font-size: 0.85rem; margin-bottom: 1rem; min-height: 1.2em; text-align: center; }
+  .output { background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 1.5rem; width: 100%; max-width: 700px; min-height: 120px; font-size: 1.1rem; line-height: 1.6; white-space: pre-wrap; word-wrap: break-word; }
+  .timing { color: #888; font-size: 0.8rem; margin-top: 0.5rem; text-align: center; }
+  .loader { display: none; margin-bottom: 1rem; color: #f6ad55; }
+  .loader.active { display: block; }
+  input[type="file"] { display: none; }
+  .info { margin-top: 2rem; color: #555; font-size: 0.75rem; text-align: center; max-width: 500px; }
+</style>
+</head>
+<body>
+<h1>Grassmann ASR</h1>
+<p class="subtitle">
+  11M params · Zero attention · ONNX + WASM · Runs entirely in your browser<br>
+  <a href="https://github.com/tisaconundrum2/grassman-transcriptions">GitHub</a> ·
+  <a href="https://arxiv.org/abs/2512.19428">Paper</a>
+</p>
+
+<div class="loader" id="loader">Loading model (46 MB)...</div>
+<p class="status" id="status">Loading model...</p>
+
+<div class="controls">
+  <button id="recordBtn" disabled>Hold to Record</button>
+  <button id="fileBtn" disabled>Upload Audio</button>
+  <input type="file" id="fileInput" accept="audio/*,.wav,.mp3,.flac,.ogg,.webm">
+</div>
+
+<div class="output" id="output">Transcription will appear here...</div>
+<p class="timing" id="timing"></p>
+
+<p class="info">
+  Audio is processed entirely on-device. Nothing is sent to a server.<br>
+  Best results with clean speech (the model was trained on audiobooks).
+</p>
+
+<script>
+const MODEL_URL = 'https://c3nozobpqr.ufs.sh/f/TcTt4xeiM980puZ1yPJ6TAuM-xRXZkI0Yg';
+const SAMPLE_RATE = 16000;
+const N_FFT = 400;
+const HOP = 160;
+const N_MELS = 80;
+// Vocab: index 0 = blank (CTC), then space, a-z, apostrophe
+const VOCAB = '\0 abcdefghijklmnopqrstuvwxyz\'';
+
+let session = null;
+let melFilters = null;
+
+// ── Mel filterbank ──────────────────────────────────────────────────────
+
+function buildMelFilterbank() {
+  const fMin = 0, fMax = SAMPLE_RATE / 2;
+  const melMin = 2595 * Math.log10(1 + fMin / 700);
+  const melMax = 2595 * Math.log10(1 + fMax / 700);
+  const nBins = N_FFT / 2 + 1;
+  const melPoints = [];
+  for (let i = 0; i <= N_MELS + 1; i++) {
+    const mel = melMin + i * (melMax - melMin) / (N_MELS + 1);
+    melPoints.push(Math.floor((N_FFT + 1) * (700 * (Math.pow(10, mel / 2595) - 1)) / SAMPLE_RATE));
+  }
+  const filters = [];
+  for (let m = 0; m < N_MELS; m++) {
+    const filt = new Float32Array(nBins);
+    for (let k = melPoints[m]; k < melPoints[m + 1]; k++) {
+      filt[k] = (k - melPoints[m]) / (melPoints[m + 1] - melPoints[m]);
+    }
+    for (let k = melPoints[m + 1]; k < melPoints[m + 2]; k++) {
+      filt[k] = (melPoints[m + 2] - k) / (melPoints[m + 2] - melPoints[m + 1]);
+    }
+    filters.push(filt);
+  }
+  return filters;
+}
+
+// ── Mel spectrogram ─────────────────────────────────────────────────────
+
+function computeMelSpectrogram(audio) {
+  if (!melFilters) melFilters = buildMelFilterbank();
+  const numFrames = Math.floor((audio.length - N_FFT) / HOP) + 1;
+  if (numFrames <= 0) return null;
+
+  // Hann window
+  const win = new Float32Array(N_FFT);
+  for (let i = 0; i < N_FFT; i++) win[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / N_FFT));
+
+  const nBins = N_FFT / 2 + 1;
+  // mel[m][t] stored as mel[m * numFrames + t]
+  const mel = new Float32Array(N_MELS * numFrames);
+
+  // Precompute twiddle factors for DFT
+  const cosTable = new Float32Array(nBins * N_FFT);
+  const sinTable = new Float32Array(nBins * N_FFT);
+  for (let k = 0; k < nBins; k++) {
+    for (let n = 0; n < N_FFT; n++) {
+      const angle = -2 * Math.PI * k * n / N_FFT;
+      cosTable[k * N_FFT + n] = Math.cos(angle);
+      sinTable[k * N_FFT + n] = Math.sin(angle);
+    }
+  }
+
+  for (let t = 0; t < numFrames; t++) {
+    const offset = t * HOP;
+    // Power spectrum via DFT
+    const power = new Float32Array(nBins);
+    for (let k = 0; k < nBins; k++) {
+      let re = 0, im = 0;
+      const kOff = k * N_FFT;
+      for (let n = 0; n < N_FFT; n++) {
+        const val = audio[offset + n] * win[n];
+        re += val * cosTable[kOff + n];
+        im += val * sinTable[kOff + n];
+      }
+      power[k] = re * re + im * im;
+    }
+    // Apply mel filterbank + log
+    for (let m = 0; m < N_MELS; m++) {
+      let sum = 0;
+      const filt = melFilters[m];
+      for (let k = 0; k < nBins; k++) sum += filt[k] * power[k];
+      mel[m * numFrames + t] = Math.log(Math.max(sum, 1e-9));
+    }
+  }
+
+  // Per-utterance normalization (must match training pipeline)
+  let mean = 0;
+  for (let i = 0; i < mel.length; i++) mean += mel[i];
+  mean /= mel.length;
+  let variance = 0;
+  for (let i = 0; i < mel.length; i++) variance += (mel[i] - mean) ** 2;
+  const std = Math.sqrt(variance / mel.length) || 1e-9;
+  for (let i = 0; i < mel.length; i++) mel[i] = (mel[i] - mean) / std;
+
+  return { data: mel, nMels: N_MELS, numFrames };
+}
+
+// ── CTC decode ──────────────────────────────────────────────────────────
+
+function ctcDecode(logits, numFrames, vocabSize) {
+  const chars = [];
+  let prev = -1;
+  for (let t = 0; t < numFrames; t++) {
+    let maxIdx = 0, maxVal = -Infinity;
+    for (let v = 0; v < vocabSize; v++) {
+      const val = logits[t * vocabSize + v];
+      if (val > maxVal) { maxVal = val; maxIdx = v; }
+    }
+    if (maxIdx !== 0 && maxIdx !== prev) {
+      chars.push(VOCAB[maxIdx] || '');
+    }
+    prev = maxIdx;
+  }
+  return chars.join('');
+}
+
+// ── Transcription pipeline ──────────────────────────────────────────────
+
+async function transcribe(audioBuffer) {
+  const status = document.getElementById('status');
+  const output = document.getElementById('output');
+  const timing = document.getElementById('timing');
+
+  // Resample to 16kHz mono
+  status.textContent = 'Resampling audio...';
+  await new Promise(r => setTimeout(r, 10));
+  const offCtx = new OfflineAudioContext(1, Math.ceil(audioBuffer.duration * SAMPLE_RATE), SAMPLE_RATE);
+  const src = offCtx.createBufferSource();
+  src.buffer = audioBuffer;
+  src.connect(offCtx.destination);
+  src.start();
+  const resampled = await offCtx.startRendering();
+  const audio = resampled.getChannelData(0);
+  const audioDur = audio.length / SAMPLE_RATE;
+
+  status.textContent = 'Computing mel spectrogram (' + audioDur.toFixed(1) + 's)...';
+  await new Promise(r => setTimeout(r, 10));
+
+  const melStart = performance.now();
+  const mel = computeMelSpectrogram(audio);
+  const melTime = performance.now() - melStart;
+  if (!mel) { output.textContent = 'Audio too short'; status.textContent = 'Ready'; return; }
+
+  // Chunk if too long (pos encoding limit ~2048 frames after subsampling)
+  // 2048 frames * 4 (subsampling) * 160 (hop) = ~20s safe limit per chunk
+  const MAX_SAMPLES = 20 * SAMPLE_RATE;
+  if (audio.length > MAX_SAMPLES) {
+    status.textContent = 'Transcribing ' + audioDur.toFixed(1) + 's in chunks...';
+    await new Promise(r => setTimeout(r, 10));
+    const texts = [];
+    let totalInference = 0;
+    for (let start = 0; start < audio.length; start += MAX_SAMPLES) {
+      const chunk = audio.slice(start, Math.min(start + MAX_SAMPLES, audio.length));
+      const chunkMel = computeMelSpectrogram(chunk);
+      if (!chunkMel) continue;
+      const tensor = new ort.Tensor('float32', chunkMel.data, [1, chunkMel.nMels, chunkMel.numFrames]);
+      const t0 = performance.now();
+      const results = await session.run({ mel: tensor });
+      totalInference += performance.now() - t0;
+      const lp = results.log_probs;
+      // ONNX output shape: [batch=1, T', vocab=29]
+      texts.push(ctcDecode(lp.data, lp.dims[1], lp.dims[2]));
+    }
+    output.textContent = texts.join(' ') || '(no speech detected)';
+    timing.textContent = audioDur.toFixed(1) + 's audio | mel: ' + (melTime / 1000).toFixed(2) + 's | inference: ' + (totalInference / 1000).toFixed(3) + 's (' + (audioDur / (totalInference / 1000)).toFixed(0) + 'x RT)';
+    status.textContent = 'Ready';
+    return;
+  }
+
+  status.textContent = 'Running inference...';
+  await new Promise(r => setTimeout(r, 10));
+
+  const tensor = new ort.Tensor('float32', mel.data, [1, mel.nMels, mel.numFrames]);
+  const t0 = performance.now();
+  const results = await session.run({ mel: tensor });
+  const elapsed = performance.now() - t0;
+
+  const logProbs = results.log_probs;
+  // ONNX output shape: [batch=1, T', vocab=29]
+  const outFrames = logProbs.dims[1];
+  const vocabSize = logProbs.dims[2];
+  const text = ctcDecode(logProbs.data, outFrames, vocabSize);
+
+  output.textContent = text || '(no speech detected)';
+  timing.textContent = audioDur.toFixed(1) + 's audio | mel: ' + (melTime / 1000).toFixed(2) + 's | inference: ' + (elapsed / 1000).toFixed(3) + 's (' + (audioDur / (elapsed / 1000)).toFixed(0) + 'x RT)';
+  status.textContent = 'Ready';
+}
+
+// ── Recording ───────────────────────────────────────────────────────────
+
+let mediaRecorder = null;
+let chunks = [];
+const recordBtn = document.getElementById('recordBtn');
+const fileBtn = document.getElementById('fileBtn');
+const fileInput = document.getElementById('fileInput');
+
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+    recordBtn.textContent = 'Hold to Record';
+    recordBtn.classList.remove('recording');
+  }
+}
+
+recordBtn.addEventListener('mousedown', async () => {
+  if (!session) return;
+  try {
+    chunks = [];
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: SAMPLE_RATE, channelCount: 1 } });
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = e => chunks.push(e.data);
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(chunks, { type: mediaRecorder.mimeType });
+      const arrayBuf = await blob.arrayBuffer();
+      const audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
+      try {
+        const audioBuf = await audioCtx.decodeAudioData(arrayBuf);
+        transcribe(audioBuf);
+      } catch (e) {
+        document.getElementById('output').textContent = 'Could not decode audio: ' + e.message;
+      }
+    };
+    mediaRecorder.start();
+    recordBtn.textContent = 'Recording...';
+    recordBtn.classList.add('recording');
+    document.getElementById('status').textContent = 'Recording... release to transcribe';
+  } catch (e) {
+    document.getElementById('status').textContent = 'Mic access denied: ' + e.message;
+  }
+});
+
+recordBtn.addEventListener('mouseup', stopRecording);
+recordBtn.addEventListener('mouseleave', stopRecording);
+// Touch support for mobile
+recordBtn.addEventListener('touchstart', (e) => { e.preventDefault(); recordBtn.dispatchEvent(new Event('mousedown')); });
+recordBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopRecording(); });
+
+fileBtn.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  document.getElementById('status').textContent = 'Loading ' + file.name + '...';
+  document.getElementById('output').textContent = '';
+  document.getElementById('timing').textContent = '';
+  try {
+    const arrayBuf = await file.arrayBuffer();
+    const audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
+    const audioBuf = await audioCtx.decodeAudioData(arrayBuf);
+    transcribe(audioBuf);
+  } catch (e) {
+    document.getElementById('output').textContent = 'Could not decode file: ' + e.message;
+    document.getElementById('status').textContent = 'Ready';
+  }
+  fileInput.value = '';
+});
+
+// ── Load model ──────────────────────────────────────────────────────────
+
+(async () => {
+  const loader = document.getElementById('loader');
+  const status = document.getElementById('status');
+  loader.classList.add('active');
+  try {
+    session = await ort.InferenceSession.create(MODEL_URL, {
+      executionProviders: ['wasm'],
+    });
+    status.textContent = 'Ready. Record or upload audio.';
+    recordBtn.disabled = false;
+    fileBtn.disabled = false;
+  } catch (e) {
+    status.textContent = 'Failed to load model: ' + e.message;
+    console.error(e);
+  }
+  loader.classList.remove('active');
+})();
+</script>
+</body>
+</html>
