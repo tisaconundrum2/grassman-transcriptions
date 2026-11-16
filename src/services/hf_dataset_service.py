@@ -592,13 +592,16 @@ class HFDatasetService(IDataset):
     def preprocess(self) -> Self:
         return self
 
-    def split(self, train_ratio: float = 0.8, val_ratio: float = 0.1) -> Self:
+    def split(self, train_ratio: float = 0.8, val_ratio: float = 0.1,
+              max_samples: int | None = None) -> Self:
         if self._cache_dir is not None:
             # Disk-cached mode: split by file indices
             from pathlib import Path
             all_indices = sorted(
                 int(f.stem) for f in Path(self._cache_dir).glob("*.pt")
             )
+            if max_samples is not None:
+                all_indices = all_indices[:max_samples]
             n = len(all_indices)
             n_train = max(1, int(n * train_ratio))
             n_val = max(1, int(n * val_ratio))

@@ -12,8 +12,9 @@ from src.interfaces import IDataset
 from src.models.config import GrassmannConfig
 from src.services.audio_service import AudioService
 from src.services.dataset_service import DatasetService
-from src.services.hf_dataset_service import HFDatasetService
 from src.services.tokenizer_service import CharTokenizer
+from src.repositories.dataset_repository import DatasetRepository
+from src.repositories.cache_repository import CacheRepository
 from src.controllers.model_controller import ModelController
 
 
@@ -38,40 +39,28 @@ class PipelineController:
                 .test()
     """
 
-    def __init__(self, config: GrassmannConfig | None = None):
+    def __init__(self, config: GrassmannConfig | None = None,
+                 cache_dir: str = "checkpoints/mel_cache"):
         self.config = config or GrassmannConfig()
         self.tokenizer = CharTokenizer()
         self.audio_service = AudioService(self.config)
-        self.dataset: IDataset | None = None
+        self._repo = DatasetRepository(self.config, self.tokenizer)
+        self._cache = CacheRepository(cache_dir)
+        self.dataset: DatasetService | None = None
         self.model: ModelController | None = None
-
-    def prepare_dataset(self, data_path: str) -> Self:
-        self.dataset = DatasetService(self.config, self.audio_service, self.tokenizer)
-        self.dataset.load(data_path).clean().preprocess().split()
-        return self
-
-    def prepare_dataset_from_pairs(self, pairs: list[tuple[str, str]]) -> Self:
-        self.dataset = DatasetService(self.config, self.audio_service, self.tokenizer)
-        self.dataset.load_from_pairs(pairs).clean().preprocess().split()
-        return self
 
     def prepare_hf_dataset(
         self,
         dataset_name: str,
         config_name: str | None = None,
         split: str | None = None,
-        audio_col: str | None = None,
-        text_col: str | None = None,
         max_samples: int | None = None,
     ) -> Self:
         """Load a dataset from HuggingFace Hub."""
-        self.dataset = HFDatasetService(self.config, self.tokenizer)
-        self.dataset.load(
-            dataset_name,
+        self.dataset = DatasetService(self._repo, self._cache)
+        self.dataset.load_dataset(
+            dataset_name, split=split,
             config_name=config_name,
-            split=split,
-            audio_col=audio_col,
-            text_col=text_col,
             max_samples=max_samples,
         ).clean().preprocess().split()
         return self
