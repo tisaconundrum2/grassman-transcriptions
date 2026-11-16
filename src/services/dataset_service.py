@@ -138,7 +138,8 @@ class DatasetService:
     def load_recipe(self, recipe_name: str,
                     max_samples_per_source: int | None = None,
                     upload_repo: str | None = None,
-                    samples_per_shard: int = 50000) -> Self:
+                    samples_per_shard: int = 50000,
+                    workers: int = 0) -> Self:
         """Stream multiple datasets per recipe and cache to disk.
 
         When upload_repo is set, shards are uploaded incrementally to HF Hub
@@ -158,6 +159,7 @@ class DatasetService:
                 src["name"], src["split"],
                 config_name=src.get("config"),
                 max_samples=src_cap,
+                workers=workers,
             )
             label = f"{src['name']}/{src['split']}"
             count = self._cache.save_stream(

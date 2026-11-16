@@ -337,7 +337,8 @@ def cmd_cache(args: argparse.Namespace) -> None:
     start = time.time()
     dataset.load_recipe(args.recipe,
                         max_samples_per_source=args.max_per_source,
-                        upload_repo=args.repo)
+                        upload_repo=args.repo,
+                        workers=args.workers)
     print(f"\n  Caching complete in {(time.time() - start)/60:.1f} minutes")
 
     _auto_pause_space()
@@ -476,6 +477,7 @@ def main() -> None:
     p.add_argument("--repo", required=True, help="HF Dataset repo")
     p.add_argument("--cache-dir", default="mel_cache")
     p.add_argument("--max-per-source", type=int, default=None)
+    p.add_argument("--workers", type=int, default=0, help="Parallel mel workers (0=sequential, default)")
 
     # export
     p = sub.add_parser("export", help="Export model to ONNX")
