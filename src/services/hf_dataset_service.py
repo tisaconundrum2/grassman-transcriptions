@@ -304,9 +304,9 @@ def _stream_multi_datasets(
         audio_col, text_col = _resolve_columns(name, None, None)
         needs_normalize = "librispeech" not in name.lower()
 
-        print(f"\n  [{saved_count} cached] Streaming {name} / {split}"
-              f"{f' ({src_config})' if src_config else ''}"
-              f"{' (normalizing)' if needs_normalize else ''}...")
+        config_str = f" ({src_config})" if src_config else ""
+        norm_str = " (normalizing)" if needs_normalize else ""
+        print(f"\n  [{saved_count} cached] Streaming {name} / {split}{config_str}{norm_str}...")
 
         ds = load_dataset(name, src_config, split=split, streaming=True)
         src_count = 0
@@ -469,8 +469,8 @@ class HFDatasetService(IDataset):
             print(f"  Loading {len(sources)} custom sources")
 
         for src in sources:
-            print(f"    - {src['name']} / {src['split']}"
-                  f"{f' ({src.get(\"config\")})' if src.get('config') else ''}")
+            cfg_str = f" ({src['config']})" if src.get('config') else ""
+            print(f"    - {src['name']} / {src['split']}{cfg_str}")
 
         self._cache_dir = _stream_multi_datasets(
             sources, self.tokenizer, self.config, cache_dir,
