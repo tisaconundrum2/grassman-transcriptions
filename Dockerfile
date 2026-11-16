@@ -23,11 +23,11 @@ COPY export_onnx.py .
 COPY inference.py .
 
 # Conformer-CTC: Grassmann + ConvModule + two-sided mixing
-# Full train.clean.100 (~28K samples), 50 epochs on T4
+# 1750h multi-dataset (LibriSpeech 960 + GigaSpeech-S + VoxPopuli)
 # Health server on port 7860 keeps HF Spaces alive
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 CMD ["python", "-u", "train_gpu.py", \
-    "--max-samples", "30000", \
+    "--recipe", "1750h", \
     "--epochs", "50", \
     "--batch-size", "32", \
     "--layers", "6", \

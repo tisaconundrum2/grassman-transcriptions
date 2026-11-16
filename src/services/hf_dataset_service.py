@@ -22,14 +22,42 @@ from src.models.config import GrassmannConfig
 from src.services.tokenizer_service import CharTokenizer
 
 
+import re
+
 KNOWN_SCHEMAS: dict[str, tuple[str, str]] = {
     "openslr/librispeech_asr": ("audio", "text"),
     "mozilla-foundation/common_voice": ("audio", "sentence"),
     "google/fleurs": ("audio", "transcription"),
     "speechcolab/gigaspeech": ("audio", "text"),
     "facebook/voxpopuli": ("audio", "normalized_text"),
+    "MLCommons/peoples_speech": ("audio", "text"),
     "espnet/yodas": ("audio", "text"),
 }
+
+# Predefined multi-dataset recipes
+DATASET_RECIPES: dict[str, list[dict]] = {
+    "librispeech-960": [
+        {"name": "openslr/librispeech_asr", "split": "train.clean.100"},
+        {"name": "openslr/librispeech_asr", "split": "train.clean.360"},
+        {"name": "openslr/librispeech_asr", "split": "train.other.500"},
+    ],
+    "1750h": [
+        {"name": "openslr/librispeech_asr", "split": "train.clean.100"},
+        {"name": "openslr/librispeech_asr", "split": "train.clean.360"},
+        {"name": "openslr/librispeech_asr", "split": "train.other.500"},
+        {"name": "facebook/voxpopuli", "config": "en", "split": "train"},
+        {"name": "MLCommons/peoples_speech", "config": "clean", "split": "train",
+         "max_samples": 30000},  # ~250h subset of 30K hours
+    ],
+}
+
+
+def normalize_transcript(text: str) -> str:
+    """Normalize transcript to lowercase ASCII with only letters, spaces, apostrophes."""
+    text = text.lower().strip()
+    text = re.sub(r"[^\w\s']", "", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
 
 
 def _resolve_columns(dataset_name: str, audio_col: str | None, text_col: str | None) -> tuple[str, str]:
@@ -238,6 +266,105 @@ def _stream_and_materialize(
         return samples
 
 
+def _stream_multi_datasets(
+    sources: list[dict],
+    tokenizer: CharTokenizer,
+    config: GrassmannConfig,
+    cache_dir: str,
+    max_samples_per_source: int | None = None,
+) -> str:
+    """Stream multiple HF datasets and cache all samples to disk.
+
+    Each source dict has: name, split, and optionally config.
+    Non-LibriSpeech datasets get normalize_transcript() applied.
+
+    Returns the cache_dir path.
+    """
+    from pathlib import Path
+    from datasets import load_dataset
+    import gc
+
+    cache_path = Path(cache_dir)
+    existing = list(cache_path.glob("*.pt"))
+    if existing:
+        print(f"  Found {len(existing)} cached samples in {cache_dir}, skipping stream.")
+        return cache_dir
+    cache_path.mkdir(parents=True, exist_ok=True)
+
+    mel_transform = T.MelSpectrogram(
+        sample_rate=config.sample_rate, n_fft=config.n_fft,
+        hop_length=config.hop_length, n_mels=config.n_mels,
+    )
+
+    saved_count = 0
+    for src in sources:
+        name = src["name"]
+        split = src["split"]
+        src_config = src.get("config")
+        audio_col, text_col = _resolve_columns(name, None, None)
+        needs_normalize = "librispeech" not in name.lower()
+
+        print(f"\n  [{saved_count} cached] Streaming {name} / {split}"
+              f"{f' ({src_config})' if src_config else ''}"
+              f"{' (normalizing)' if needs_normalize else ''}...")
+
+        ds = load_dataset(name, src_config, split=split, streaming=True)
+        src_count = 0
+        # Per-source cap: use source-level override, then global cap, then unlimited
+        src_cap = src.get("max_samples") or max_samples_per_source
+
+        for i, sample in enumerate(ds):
+            if src_cap and src_count >= src_cap:
+                break
+
+            try:
+                raw_text = sample[text_col].strip()
+            except (KeyError, AttributeError):
+                continue
+
+            text = normalize_transcript(raw_text) if needs_normalize else raw_text
+            if len(text) == 0:
+                continue
+
+            try:
+                audio_array = sample[audio_col]["array"]
+            except (KeyError, TypeError):
+                continue
+
+            # Skip too-short (<0.1s) or too-long (>15s) clips
+            if len(audio_array) < 1600 or len(audio_array) > 240000:
+                continue
+
+            try:
+                mel, _ = _process_sample(sample, audio_col, text_col, mel_transform, config.sample_rate)
+            except Exception:
+                continue
+
+            # Re-normalize the text (process_sample returns raw text)
+            if needs_normalize:
+                text = normalize_transcript(raw_text)
+            tokens = tokenizer.encode(text)
+
+            if len(tokens) == 0:
+                continue
+
+            torch.save((mel, tokens), cache_path / f"{saved_count}.pt")
+            saved_count += 1
+            src_count += 1
+
+            del mel, tokens, sample, audio_array
+            if src_count % 1000 == 0:
+                print(f"    {name}: {src_count} samples cached ({saved_count} total)...")
+                gc.collect()
+
+        del ds
+        gc.collect()
+        print(f"    {name}/{split}: {src_count} samples")
+
+    print(f"\n  Total: {saved_count} samples cached to {cache_dir}")
+    return cache_dir
+
+
 class HFDatasetService(IDataset):
     """Loads audio datasets from HuggingFace Hub.
 
@@ -245,6 +372,10 @@ class HFDatasetService(IDataset):
         _dataset = HFDatasetService(config, tokenizer)
         _dataset.load("openslr/librispeech_asr", split="train.clean.100",
                        max_samples=100)
+               .clean().preprocess().split()
+
+        # Multi-dataset mode:
+        _dataset.load_multi("1750h", cache_dir="checkpoints/mel_cache")
                .clean().preprocess().split()
     """
 
@@ -312,6 +443,39 @@ class HFDatasetService(IDataset):
             if self._hf_val: sizes.append(f"val={len(self._hf_val)}")
             if self._hf_test: sizes.append(f"test={len(self._hf_test)}")
             print(f"  Loaded splits: {', '.join(sizes)}")
+        return self
+
+    def load_multi(
+        self,
+        recipe: str | list[dict],
+        cache_dir: str,
+        max_samples_per_source: int | None = None,
+    ) -> Self:
+        """Load multiple datasets using a recipe name or explicit source list.
+
+        Args:
+            recipe: Either a key from DATASET_RECIPES (e.g. "1750h", "librispeech-960")
+                    or a list of dicts with name/split/config keys.
+            cache_dir: Directory to cache processed mel+token pairs.
+            max_samples_per_source: Cap samples per dataset (for testing).
+        """
+        if isinstance(recipe, str):
+            if recipe not in DATASET_RECIPES:
+                raise ValueError(f"Unknown recipe '{recipe}'. Available: {list(DATASET_RECIPES.keys())}")
+            sources = DATASET_RECIPES[recipe]
+            print(f"  Loading recipe '{recipe}': {len(sources)} sources")
+        else:
+            sources = recipe
+            print(f"  Loading {len(sources)} custom sources")
+
+        for src in sources:
+            print(f"    - {src['name']} / {src['split']}"
+                  f"{f' ({src.get(\"config\")})' if src.get('config') else ''}")
+
+        self._cache_dir = _stream_multi_datasets(
+            sources, self.tokenizer, self.config, cache_dir,
+            max_samples_per_source=max_samples_per_source,
+        )
         return self
 
     def clean(self) -> Self:

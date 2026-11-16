@@ -111,6 +111,10 @@ def main() -> None:
     parser.add_argument("--split", default="train.clean.100")
     parser.add_argument("--max-samples", type=int, default=None,
                         help="Limit samples (None = full split, uses streaming if set)")
+    parser.add_argument("--recipe", default=None,
+                        help="Multi-dataset recipe: 'librispeech-960', '1750h', etc.")
+    parser.add_argument("--max-per-source", type=int, default=None,
+                        help="Cap samples per dataset source (for testing multi-dataset)")
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--layers", type=int, default=6)
@@ -139,8 +143,11 @@ def main() -> None:
     print("  Grassmann Transcription — GPU Training")
     print("=" * 60)
     print_device_info()
-    print(f"  Dataset: {args.dataset} / {args.split}")
-    print(f"  Max samples: {args.max_samples or 'full split'}")
+    if args.recipe:
+        print(f"  Recipe: {args.recipe}")
+    else:
+        print(f"  Dataset: {args.dataset} / {args.split}")
+    print(f"  Max samples: {args.max_samples or args.max_per_source or 'all'}")
     print(f"  Epochs: {args.epochs}")
     print(f"  Batch size: {args.batch_size}")
     mode = "CTC (encoder-only)" if args.ctc else "Seq2Seq (encoder-decoder, fully attention-free)"
@@ -171,16 +178,27 @@ def main() -> None:
         conv_kernel_size=args.conv_kernel,
     )
 
-    # Dataset — use disk cache for large datasets (>8K), in-memory for smaller
-    cache_dir = os.path.join(args.save_dir, "mel_cache") if (args.max_samples or 0) > 8000 else None
+    # Dataset loading
     tokenizer = CharTokenizer()
     dataset = HFDatasetService(config, tokenizer)
-    dataset.load(
-        args.dataset,
-        split=args.split,
-        max_samples=args.max_samples,
-        cache_dir=cache_dir,
-    ).clean().preprocess().split()
+
+    if args.recipe:
+        # Multi-dataset mode: always disk-cached
+        cache_dir = os.path.join(args.save_dir, "mel_cache")
+        dataset.load_multi(
+            args.recipe,
+            cache_dir=cache_dir,
+            max_samples_per_source=args.max_per_source,
+        ).clean().preprocess().split()
+    else:
+        # Single dataset mode
+        cache_dir = os.path.join(args.save_dir, "mel_cache") if (args.max_samples or 0) > 8000 else None
+        dataset.load(
+            args.dataset,
+            split=args.split,
+            max_samples=args.max_samples,
+            cache_dir=cache_dir,
+        ).clean().preprocess().split()
 
     # Force cleanup after dataset caching (streaming buffers, librosa, etc.)
     import gc
