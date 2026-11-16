@@ -74,6 +74,7 @@ def _add_model_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--conformer", action="store_true", help="Conformer blocks")
     p.add_argument("--two-sided", action="store_true", help="Bidirectional mixing")
     p.add_argument("--conv-kernel", type=int, default=31)
+    p.add_argument("--ablation", action="store_true", help="Symmetric-product ablation (no Grassmann geometry)")
 
 
 def _auto_pause_space() -> None:
@@ -94,7 +95,9 @@ def cmd_train(args: argparse.Namespace) -> None:
     from src.models.config import GrassmannConfig
     from src.controllers.model_controller import ModelController
     from src.services.tokenizer_service import CharTokenizer
-    from src.services.hf_dataset_service import HFDatasetService
+    from src.repositories.dataset_repository import DatasetRepository
+    from src.repositories.cache_repository import CacheRepository
+    from src.services.dataset_service import DatasetService
 
     _start_health_server()
 
@@ -105,6 +108,7 @@ def cmd_train(args: argparse.Namespace) -> None:
         r_reduced=args.r_reduced, learning_rate=args.lr,
         use_seq2seq=not args.ctc, use_conformer=args.conformer,
         two_sided=args.two_sided, conv_kernel_size=args.conv_kernel,
+        use_ablation=args.ablation,
     )
 
     print("\n" + "=" * 60)
@@ -119,23 +123,27 @@ def cmd_train(args: argparse.Namespace) -> None:
     mode = "CTC" if args.ctc else "Seq2Seq"
     block = "Conformer" if args.conformer else "Plain"
     mix = "two-sided" if args.two_sided else "causal"
+    mixer = "Ablation (symmetric)" if args.ablation else "Grassmann (Plücker)"
     print(f"  Mode: {mode} | Blocks: {block} ({mix})")
+    print(f"  Mixer: {mixer}")
     print(f"  Encoder: {args.layers}L / d={args.d_model} / r={args.r_reduced}")
     print("=" * 60 + "\n")
 
     tokenizer = CharTokenizer()
-    dataset = HFDatasetService(config, tokenizer)
     cache_dir = os.path.join(args.save_dir, "mel_cache")
+    repo = DatasetRepository(config, tokenizer)
+    cache = CacheRepository(cache_dir)
+    dataset = DatasetService(repo, cache)
 
     if args.from_cache:
-        dataset.load_from_hub_cache(args.from_cache, cache_dir).clean().preprocess().split()
+        dataset.load_from_hub_cache(args.from_cache).clean().preprocess().split(
+            max_samples=args.max_samples)
     elif args.recipe:
-        dataset.load_multi(args.recipe, cache_dir=cache_dir,
-                           max_samples_per_source=args.max_per_source).clean().preprocess().split()
+        dataset.load_recipe(args.recipe,
+                            max_samples_per_source=args.max_per_source).clean().preprocess().split()
     else:
-        c = cache_dir if (args.max_samples or 0) > 8000 else None
-        dataset.load(args.dataset, split=args.split, max_samples=args.max_samples,
-                     cache_dir=c).clean().preprocess().split()
+        dataset.load_dataset(args.dataset, split=args.split,
+                             max_samples=args.max_samples).clean().preprocess().split()
 
     gc.collect()
     if torch.cuda.is_available():
@@ -211,7 +219,7 @@ def cmd_train(args: argparse.Namespace) -> None:
     print(f"{'=' * 60}")
 
     _decode_samples(model_ctrl, dataset, n=5)
-    _post_training(model_ctrl, config, args.save_dir)
+    _post_training(model_ctrl, config, args.save_dir, run_name=args.run_name)
 
 
 def _decode_samples(model_ctrl, dataset, n: int = 3) -> None:
@@ -226,8 +234,15 @@ def _decode_samples(model_ctrl, dataset, n: int = 3) -> None:
     print()
 
 
-def _post_training(model_ctrl, config, save_dir: str) -> None:
+def _post_training(model_ctrl, config, save_dir: str, run_name: str | None = None) -> None:
     from src.services.export_service import export_seq2seq, export_ctc
+
+    def _prefixed(name: str) -> str:
+        """Prefix a filename with run_name so uploads are distinguishable."""
+        if not run_name:
+            return name
+        base, ext = os.path.splitext(name)
+        return f"{run_name}-{base}{ext}"
 
     try:
         from src.services.model_hub_service import save_model
@@ -247,21 +262,48 @@ def _post_training(model_ctrl, config, save_dir: str) -> None:
     except Exception as e:
         print(f"  Warning: ONNX export failed: {e}", flush=True)
 
+    # Rename artifacts with run_name prefix before upload
+    if run_name:
+        import shutil
+        # Rename best_model.pt → ablation-smol-best_model.pt etc.
+        for name in ["best_model.pt", "final_model.pt"]:
+            src = os.path.join(save_dir, name)
+            dst = os.path.join(save_dir, _prefixed(name))
+            if os.path.isfile(src):
+                shutil.move(src, dst)
+        # Rename ONNX files (model.onnx → ablation-smol-model.onnx etc.)
+        onnx_dir = os.path.join(save_dir, "onnx")
+        if os.path.isdir(onnx_dir):
+            for fname in list(os.listdir(onnx_dir)):
+                src = os.path.join(onnx_dir, fname)
+                dst = os.path.join(onnx_dir, _prefixed(fname))
+                if os.path.isfile(src):
+                    shutil.move(src, dst)
+        # Rename bundle config files
+        bundle_dir = os.path.join(save_dir, "bundle")
+        if os.path.isdir(bundle_dir):
+            for fname in list(os.listdir(bundle_dir)):
+                src = os.path.join(bundle_dir, fname)
+                dst = os.path.join(bundle_dir, _prefixed(fname))
+                if os.path.isfile(src):
+                    shutil.move(src, dst)
+
     try:
         from src.services.upload_service import upload_file, upload_directory
         bundle_dir = os.path.join(save_dir, "bundle")
         onnx_dir = os.path.join(save_dir, "onnx")
         if os.path.isdir(bundle_dir):
-            for fname in ["config.json", "tokenizer_info.json"]:
+            for fname in sorted(os.listdir(bundle_dir)):
                 fpath = os.path.join(bundle_dir, fname)
                 if os.path.isfile(fpath):
-                    upload_file(fpath, custom_id=f"bundle/{fname}")
+                    upload_file(fpath)
         if os.path.isdir(onnx_dir):
-            urls = upload_directory(onnx_dir, prefix="onnx")
+            urls = upload_directory(onnx_dir)
             print(f"  Uploaded {len(urls)} ONNX files", flush=True)
-        best_path = os.path.join(save_dir, "best_model.pt")
+        best_name = _prefixed("best_model.pt")
+        best_path = os.path.join(save_dir, best_name)
         if os.path.isfile(best_path):
-            upload_file(best_path, custom_id="best_model.pt")
+            upload_file(best_path)
     except Exception as e:
         print(f"  Warning: upload failed: {e}", flush=True)
 
@@ -273,7 +315,9 @@ def _post_training(model_ctrl, config, save_dir: str) -> None:
 def cmd_cache(args: argparse.Namespace) -> None:
     from src.models.config import GrassmannConfig
     from src.services.tokenizer_service import CharTokenizer
-    from src.services.hf_dataset_service import HFDatasetService
+    from src.repositories.dataset_repository import DatasetRepository
+    from src.repositories.cache_repository import CacheRepository
+    from src.services.dataset_service import DatasetService
 
     _start_health_server()
 
@@ -286,14 +330,16 @@ def cmd_cache(args: argparse.Namespace) -> None:
 
     config = GrassmannConfig()
     tokenizer = CharTokenizer()
-    dataset = HFDatasetService(config, tokenizer)
+    repo = DatasetRepository(config, tokenizer)
+    cache = CacheRepository(args.cache_dir)
+    dataset = DatasetService(repo, cache)
 
     start = time.time()
-    dataset.load_multi(args.recipe, cache_dir=args.cache_dir,
-                       max_samples_per_source=args.max_per_source)
+    dataset.load_recipe(args.recipe,
+                        max_samples_per_source=args.max_per_source,
+                        upload_repo=args.repo)
     print(f"\n  Caching complete in {(time.time() - start)/60:.1f} minutes")
 
-    dataset.upload_cache(args.repo)
     _auto_pause_space()
     print(f"\n  Done! Now train with: python app.py train --from-cache {args.repo}")
 
@@ -420,6 +466,7 @@ def main() -> None:
     p.add_argument("--epochs", type=int, default=50)
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--save-dir", default="checkpoints")
+    p.add_argument("--run-name", default=None, help="Prefix for uploaded artifacts (e.g. 'ablation-smol')")
     p.add_argument("--decode-every", type=int, default=5)
     _add_model_args(p)
 
