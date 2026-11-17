@@ -10,10 +10,16 @@ from __future__ import annotations
 
 import gc
 import json
+import os
 from pathlib import Path
 from typing import Iterator
 
 import torch
+
+
+def _hf_token() -> str | None:
+    """Get HF token from environment."""
+    return os.environ.get("HF_TOKEN")
 
 
 class CacheRepository:
@@ -134,7 +140,7 @@ class CacheRepository:
         if repo_id:
             try:
                 from huggingface_hub import list_repo_files
-                files = list_repo_files(repo_id, repo_type="dataset")
+                files = list_repo_files(repo_id, repo_type="dataset", token=_hf_token())
                 for fname in files:
                     if fname.startswith("shard_") and fname.endswith(".pt"):
                         try:
@@ -151,9 +157,10 @@ class CacheRepository:
         """Pack and upload a single shard to HF Hub."""
         from huggingface_hub import HfApi, create_repo
 
-        api = HfApi()
+        token = _hf_token()
+        api = HfApi(token=token)
         try:
-            create_repo(repo_id, repo_type="dataset", exist_ok=True)
+            create_repo(repo_id, repo_type="dataset", exist_ok=True, token=token)
         except Exception:
             pass
 
@@ -181,8 +188,11 @@ class CacheRepository:
             pt = self._cache_dir / f"{idx}.pt"
             pt.unlink(missing_ok=True)
 
-    def download_from_hub(self, repo_id: str) -> int:
+    def download_from_hub(self, repo_id: str, max_samples: int | None = None) -> int:
         """Download pre-cached mel shards from a HF Dataset repo and unpack to .pt files.
+
+        When max_samples is set, stops unpacking once enough samples are
+        available — avoids downloading all shards when only a subset is needed.
 
         Returns the total number of unpacked samples.
         """
@@ -190,21 +200,31 @@ class CacheRepository:
 
         if self.exists():
             n = self.count()
-            print(f"  Found {n} cached samples in {self._cache_dir}, skipping download.")
-            return n
+            if max_samples is None or n >= max_samples:
+                print(f"  Found {n} cached samples in {self._cache_dir}, skipping download.")
+                return n
 
         self._cache_dir.mkdir(parents=True, exist_ok=True)
-        print(f"  Downloading mel cache from {repo_id}...")
+        existing = self.count()
+        if max_samples:
+            print(f"  Downloading up to {max_samples} samples from {repo_id}...")
+        else:
+            print(f"  Downloading mel cache from {repo_id}...")
 
-        files = list_repo_files(repo_id, repo_type="dataset")
+        token = _hf_token()
+        files = list_repo_files(repo_id, repo_type="dataset", token=token)
         shard_files = sorted(f for f in files if f.startswith("shard_") and f.endswith(".pt"))
         print(f"  Found {len(shard_files)} shards")
 
-        sample_idx = 0
+        sample_idx = existing
         for shard_name in shard_files:
-            local_path = hf_hub_download(repo_id, shard_name, repo_type="dataset")
+            if max_samples and sample_idx >= max_samples:
+                break
+            local_path = hf_hub_download(repo_id, shard_name, repo_type="dataset", token=token)
             shard_data = torch.load(local_path, weights_only=True, map_location="cpu")
             for mel, tokens in shard_data:
+                if max_samples and sample_idx >= max_samples:
+                    break
                 torch.save((mel, tokens), self._cache_dir / f"{sample_idx}.pt")
                 sample_idx += 1
             del shard_data
@@ -219,9 +239,10 @@ class CacheRepository:
         import shutil
         from huggingface_hub import HfApi, create_repo
 
-        api = HfApi()
+        token = _hf_token()
+        api = HfApi(token=token)
         try:
-            create_repo(repo_id, repo_type="dataset", exist_ok=True)
+            create_repo(repo_id, repo_type="dataset", exist_ok=True, token=token)
             print(f"  Dataset repo: https://huggingface.co/datasets/{repo_id}")
         except Exception as e:
             print(f"  Repo creation note: {e}")

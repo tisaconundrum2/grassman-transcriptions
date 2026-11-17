@@ -129,9 +129,9 @@ class DatasetService:
         self._val_ds: Dataset | None = None
         self._test_ds: Dataset | None = None
 
-    def load_from_hub_cache(self, repo_id: str) -> Self:
+    def load_from_hub_cache(self, repo_id: str, max_samples: int | None = None) -> Self:
         """Download pre-cached mel shards from a HF Dataset repo."""
-        self._cache.download_from_hub(repo_id)
+        self._cache.download_from_hub(repo_id, max_samples=max_samples)
         self._use_cache = True
         return self
 

@@ -136,7 +136,8 @@ def cmd_train(args: argparse.Namespace) -> None:
     dataset = DatasetService(repo, cache)
 
     if args.from_cache:
-        dataset.load_from_hub_cache(args.from_cache).clean().preprocess().split(
+        dataset.load_from_hub_cache(args.from_cache,
+                                    max_samples=args.max_samples).clean().preprocess().split(
             max_samples=args.max_samples)
     elif args.recipe:
         dataset.load_recipe(args.recipe,
