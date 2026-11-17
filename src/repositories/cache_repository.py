@@ -87,9 +87,11 @@ class CacheRepository:
         # Figure out next shard index from local + remote shards
         shard_idx = self._next_shard_idx(repo_id=repo_id)
 
+        # Track which .pt indices belong to the current shard
+        shard_start = start_idx
+
         for mel, tokens in stream:
             self.save(start_idx + count, mel, tokens)
-            shard_buffer.append((mel.clone(), tokens.clone()))
             count += 1
             del mel, tokens
 
@@ -99,22 +101,20 @@ class CacheRepository:
                       flush=True)
                 gc.collect()
 
-            # Incremental upload when shard is full
-            if repo_id and len(shard_buffer) >= samples_per_shard:
-                self._upload_shard(repo_id, shard_idx, shard_buffer)
-                # Delete local .pt files that were just uploaded
-                self._delete_range(start_idx + count - len(shard_buffer),
-                                   start_idx + count)
-                shard_buffer = []
+            # Incremental upload when shard is full — read back from disk
+            # instead of buffering in RAM to avoid OOM
+            if repo_id and (count % samples_per_shard == 0):
+                shard_end = start_idx + count
+                self._upload_shard_from_disk(repo_id, shard_idx, shard_start, shard_end)
+                self._delete_range(shard_start, shard_end)
+                shard_start = shard_end
                 shard_idx += 1
                 gc.collect()
 
         # Upload remaining partial shard
-        if repo_id and shard_buffer:
-            self._upload_shard(repo_id, shard_idx, shard_buffer)
-            self._delete_range(start_idx + count - len(shard_buffer),
-                               start_idx + count)
-            shard_buffer = []
+        if repo_id and shard_start < start_idx + count:
+            self._upload_shard_from_disk(repo_id, shard_idx, shard_start, start_idx + count)
+            self._delete_range(shard_start, start_idx + count)
             shard_idx += 1
 
         gc.collect()
@@ -179,6 +179,53 @@ class CacheRepository:
             commit_message=f"Shard {shard_idx}: {len(data)} samples",
         )
         # Delete local shard after upload to save disk
+        shard_path.unlink(missing_ok=True)
+        print(f"    Shard {shard_idx} uploaded and cleaned up.", flush=True)
+
+    def _upload_shard_from_disk(self, repo_id: str, shard_idx: int,
+                              start: int, end: int) -> None:
+        """Read .pt files from disk, pack into a shard, and upload.
+
+        Loads one file at a time to avoid holding the entire shard in RAM.
+        """
+        from huggingface_hub import HfApi, create_repo
+
+        token = _hf_token()
+        api = HfApi(token=token)
+        try:
+            create_repo(repo_id, repo_type="dataset", exist_ok=True, token=token)
+        except Exception:
+            pass
+
+        # Collect samples from disk one at a time
+        shard_data: list[tuple[torch.Tensor, torch.Tensor]] = []
+        for idx in range(start, end):
+            pt_path = self._cache_dir / f"{idx}.pt"
+            if pt_path.exists():
+                mel, tokens = torch.load(pt_path, weights_only=True, map_location="cpu")
+                shard_data.append((mel, tokens))
+
+        if not shard_data:
+            return
+
+        self._shard_dir.mkdir(parents=True, exist_ok=True)
+        shard_path = self._shard_dir / f"shard_{shard_idx:04d}.pt"
+        torch.save(shard_data, shard_path)
+        size_mb = shard_path.stat().st_size / 1e6
+        n = len(shard_data)
+        del shard_data
+        gc.collect()
+
+        print(f"    Uploading shard_{shard_idx:04d}: {n} samples ({size_mb:.0f} MB)...",
+              flush=True)
+
+        api.upload_file(
+            path_or_fileobj=str(shard_path),
+            path_in_repo=f"shard_{shard_idx:04d}.pt",
+            repo_id=repo_id,
+            repo_type="dataset",
+            commit_message=f"Shard {shard_idx}: {n} samples",
+        )
         shard_path.unlink(missing_ok=True)
         print(f"    Shard {shard_idx} uploaded and cleaned up.", flush=True)
 
