@@ -1,3 +1,12 @@
+---
+title: Grassmann Transcription
+emoji: 🔊
+colorFrom: purple
+colorTo: blue
+sdk: docker
+pinned: false
+---
+
 # Grassmann Manifold Audio Transcription
 
 **An attention-free speech recognition model using Grassmann flows and Plücker coordinates.**
@@ -49,12 +58,109 @@ Try it live: **[tisaconundrum2.github.io/grassman-transcriptions](https://tisaco
 
 Runs entirely in the browser via ONNX + WASM. 11M params, 120x real-time on 16min audio.
 
-## GPU Training on HF Spaces
+## GPU Training on HF Jobs
 
-This repo is configured as a Docker Space. The workflow is:
+Training runs on [HF Jobs](https://huggingface.co/docs/hub/en/jobs) — per-second GPU billing, persistent secrets, auto-retry on failure. **Do not use HF Spaces for training** (ephemeral disk, health check kills, secrets require restarts).
 
-1. **CPU Space** — `python app.py cache --recipe 1750h` streams audio, computes mels, uploads shards to a HF Dataset repo
-2. **GPU Space** — `python app.py train --from-cache <repo>` downloads pre-cached mels and trains immediately (no expensive re-caching)
+### Setup
+
+```bash
+pip install 'huggingface_hub>=1.8'
+hf auth login
+```
+
+### Step 1: Cache mel spectrograms (one-time, CPU)
+
+```bash
+hf jobs run \
+  --flavor cpu-basic \
+  --timeout 6h \
+  --name cache-1750h \
+  -s HF_TOKEN \
+  registry.hf.space/tisaconundrum-grassmann-cache:latest \
+  -- python -u app.py cache \
+    --recipe 1750h \
+    --cache-dir mel_cache \
+    --repo tisaconundrum/grassmann-mel-cache
+```
+
+This streams ~280K audio samples from 5 datasets, computes mel spectrograms, and uploads shards incrementally to `tisaconundrum/grassmann-mel-cache`. Progress survives container restarts — each shard uploads as it fills.
+
+### Step 2: Train (GPU)
+
+**Grassmann (Plücker mixer):**
+```bash
+hf jobs run \
+  --flavor t4-small \
+  --timeout 12h \
+  --attempts 3 \
+  --name smol-grassmann \
+  -s HF_TOKEN \
+  --detach \
+  registry.hf.space/tisaconundrum-grassmann-transcription:latest \
+  -- python -u app.py train \
+    --from-cache tisaconundrum/grassmann-mel-cache \
+    --max-samples 28539 \
+    --epochs 50 --batch-size 32 --layers 6 --d-model 256 --r-reduced 32 --lr 3e-4 \
+    --ctc --conformer --two-sided \
+    --run-name smol-grassmann --save-dir checkpoints --decode-every 5
+```
+
+**Ablation (symmetric mixer — no Grassmann geometry):**
+```bash
+hf jobs run \
+  --flavor t4-small \
+  --timeout 12h \
+  --attempts 3 \
+  --name smol-ablation \
+  -s HF_TOKEN \
+  --detach \
+  registry.hf.space/tisaconundrum-grassmann-ablation:latest \
+  -- python -u app.py train \
+    --from-cache tisaconundrum/grassmann-mel-cache \
+    --max-samples 28539 \
+    --epochs 50 --batch-size 32 --layers 6 --d-model 256 --r-reduced 32 --lr 3e-4 \
+    --ctc --conformer --two-sided --ablation \
+    --run-name smol-ablation --save-dir checkpoints --decode-every 5
+```
+
+### Step 3: Monitor
+
+```bash
+hf jobs logs -f tisaconundrum/<job_id>     # Stream logs
+hf jobs inspect tisaconundrum/<job_id>     # Check status
+hf jobs list                               # List all jobs
+```
+
+### Key flags
+
+| Flag | Purpose |
+|------|---------|
+| `--from-cache <repo>` | Pull pre-cached mel shards from HF Dataset repo |
+| `--max-samples <n>` | Subset of cached data (28539 = train.clean.100) |
+| `--ablation` | Swap Plücker for symmetric products |
+| `--run-name <name>` | Prefix for saved artifacts (avoids collisions) |
+| `--recipe <name>` | Dataset recipe from `recipes.yaml` |
+| `-s HF_TOKEN` | Pass HF token as secret (for checkpoint uploads) |
+| `--attempts 3` | Auto-retry on failure (checkpoints resume from Hub) |
+
+### Checkpoint persistence
+
+Best model weights upload to `tisaconundrum/grassmann-mel-cache` under `checkpoints/{run_name}-best_model.pt` every time val_loss improves. On restart (or `--attempts` retry), training resumes from the last uploaded checkpoint automatically.
+
+### Docker images
+
+Space repos auto-build images at `registry.hf.space/<owner>-<space>:latest`:
+- `tisaconundrum-grassmann-transcription` — Grassmann (Plücker) mixer
+- `tisaconundrum-grassmann-ablation` — Symmetric product mixer
+- `tisaconundrum-grassmann-cache` — CPU caching job
+
+### Cost
+
+| Config | Hardware | Time | Cost |
+|--------|----------|------|------|
+| Smol (11M, 100h, 50 epochs) | T4 small | ~9h | ~$3.60 |
+| Cache (1750h recipe) | CPU basic | ~4h | ~$0.04 |
 
 ## Project Structure
 
