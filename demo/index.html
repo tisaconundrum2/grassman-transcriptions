@@ -27,6 +27,10 @@
   .loader.active { display: block; }
   input[type="file"] { display: none; }
   .info { margin-top: 2rem; color: #555; font-size: 0.75rem; text-align: center; max-width: 500px; }
+  .model-select { margin-bottom: 1rem; text-align: center; }
+  .model-select select { padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid #444; background: #1a1a1a; color: #e0e0e0; font-size: 0.9rem; cursor: pointer; }
+  .model-select select:focus { outline: none; border-color: #63b3ed; }
+  .model-select label { color: #888; font-size: 0.85rem; margin-right: 0.5rem; }
 </style>
 </head>
 <body>
@@ -37,7 +41,15 @@
   <a href="https://arxiv.org/abs/2512.19428">Paper</a>
 </p>
 
-<div class="loader" id="loader">Loading model (46 MB)...</div>
+<div class="model-select">
+  <label for="modelSelect">Model:</label>
+  <select id="modelSelect">
+    <option value="grassmann-smol" selected>Grassmann (Plücker) — 11M</option>
+    <option value="ablation-smol">Ablation (Symmetric) — 11M</option>
+  </select>
+</div>
+
+<div class="loader" id="loader">Loading model...</div>
 <p class="status" id="status">Loading model...</p>
 
 <div class="controls">
@@ -55,7 +67,20 @@
 </p>
 
 <script>
-const MODEL_URL = 'https://c3nozobpqr.ufs.sh/f/TcTt4xeiM980puZ1yPJ6TAuM-xRXZkI0Yg';
+const MODELS = {
+  'grassmann-smol': {
+    name: 'Grassmann (Plücker)',
+    url: 'https://c3nozobpqr.ufs.sh/f/TcTt4xeiM980puZ1yPJ6TAuM-xRXZkI0Yg',
+    size: '46 MB',
+  },
+  'ablation-smol': {
+    name: 'Ablation (Symmetric)',
+    url: 'asr-models/ablation-smol.onnx',
+    size: '49 MB',
+  },
+};
+
+let currentModelId = 'grassmann-smol';
 const SAMPLE_RATE = 16000;
 const N_FFT = 400;
 const HOP = 160;
@@ -337,22 +362,40 @@ fileInput.addEventListener('change', async (e) => {
 
 // ── Load model ──────────────────────────────────────────────────────────
 
-(async () => {
+async function loadModel(modelId) {
   const loader = document.getElementById('loader');
   const status = document.getElementById('status');
+  const model = MODELS[modelId];
+  if (!model) return;
+
+  recordBtn.disabled = true;
+  fileBtn.disabled = true;
+  session = null;
+  currentModelId = modelId;
+
+  loader.textContent = 'Loading ' + model.name + ' (' + model.size + ')...';
   loader.classList.add('active');
+  status.textContent = 'Loading ' + model.name + '...';
+
   try {
-    session = await ort.InferenceSession.create(MODEL_URL, {
+    session = await ort.InferenceSession.create(model.url, {
       executionProviders: ['wasm'],
     });
-    status.textContent = 'Ready. Record or upload audio.';
+    status.textContent = model.name + ' ready. Record or upload audio.';
     recordBtn.disabled = false;
     fileBtn.disabled = false;
   } catch (e) {
-    status.textContent = 'Failed to load model: ' + e.message;
+    status.textContent = 'Failed to load ' + model.name + ': ' + e.message;
     console.error(e);
   }
   loader.classList.remove('active');
+}
+
+const modelSelect = document.getElementById('modelSelect');
+modelSelect.addEventListener('change', () => loadModel(modelSelect.value));
+
+(async () => {
+  await loadModel(currentModelId);
 })();
 </script>
 </body>
