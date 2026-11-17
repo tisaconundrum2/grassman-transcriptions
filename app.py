@@ -88,6 +88,105 @@ def _auto_pause_space() -> None:
         print(f"  Note: could not auto-pause: {e}", flush=True)
 
 
+# ── checkpoint persistence ────────────────────────────────────────────────
+
+def _try_resume_checkpoint(model_ctrl, repo_id: str | None,
+                           checkpoint_name: str, save_dir: str) -> tuple[int, float]:
+    """Try to download and load a checkpoint from the HF Dataset repo.
+
+    Returns (start_epoch, best_val_loss). If no checkpoint found, returns (1, inf).
+    """
+    if not repo_id:
+        return 1, float("inf")
+
+    try:
+        from huggingface_hub import hf_hub_download, list_repo_files
+        hf_token = os.environ.get("HF_TOKEN")
+        files = list_repo_files(repo_id, repo_type="dataset", token=hf_token)
+        ckpt_path = f"checkpoints/{checkpoint_name}"
+        meta_path = f"checkpoints/{checkpoint_name}.meta.json"
+
+        if ckpt_path not in files:
+            print(f"  No checkpoint found in {repo_id} ({ckpt_path})", flush=True)
+            return 1, float("inf")
+
+        # Download checkpoint
+        local_ckpt = hf_hub_download(repo_id, ckpt_path, repo_type="dataset", token=hf_token)
+        state_dict = torch.load(local_ckpt, weights_only=True, map_location="cpu")
+        assert model_ctrl.nn_model is not None
+        model_ctrl.nn_model.load_state_dict(state_dict)
+        del state_dict
+
+        # Also save locally so training can continue saving to same path
+        import shutil
+        os.makedirs(save_dir, exist_ok=True)
+        shutil.copy2(local_ckpt, os.path.join(save_dir, "best_model.pt"))
+
+        # Load metadata (epoch, val_loss)
+        start_epoch = 1
+        best_val_loss = float("inf")
+        if meta_path in files:
+            import json
+            local_meta = hf_hub_download(repo_id, meta_path, repo_type="dataset", token=hf_token)
+            with open(local_meta) as f:
+                meta = json.load(f)
+            start_epoch = meta.get("epoch", 0) + 1
+            best_val_loss = meta.get("val_loss", float("inf"))
+
+        print(f"  Resumed from checkpoint: epoch {start_epoch - 1}, "
+              f"val_loss={best_val_loss:.4f}", flush=True)
+        if torch.cuda.is_available():
+            model_ctrl.nn_model.cuda()
+        return start_epoch, best_val_loss
+
+    except Exception as e:
+        print(f"  Could not resume checkpoint: {e}", flush=True)
+        return 1, float("inf")
+
+
+def _upload_checkpoint(repo_id: str | None, save_dir: str,
+                       checkpoint_name: str, epoch: int, val_loss: float) -> None:
+    """Upload best_model.pt + metadata to HF Dataset repo for crash resilience."""
+    if not repo_id:
+        return
+
+    try:
+        import json
+        from huggingface_hub import HfApi
+        hf_token = os.environ.get("HF_TOKEN")
+        api = HfApi(token=hf_token)
+
+        local_pt = os.path.join(save_dir, "best_model.pt")
+        if not os.path.isfile(local_pt):
+            return
+
+        # Upload model weights
+        api.upload_file(
+            path_or_fileobj=local_pt,
+            path_in_repo=f"checkpoints/{checkpoint_name}",
+            repo_id=repo_id,
+            repo_type="dataset",
+            commit_message=f"Checkpoint epoch {epoch}: val_loss={val_loss:.4f}",
+        )
+
+        # Upload metadata
+        meta = {"epoch": epoch, "val_loss": val_loss, "checkpoint_name": checkpoint_name}
+        meta_path = os.path.join(save_dir, f"{checkpoint_name}.meta.json")
+        with open(meta_path, "w") as f:
+            json.dump(meta, f)
+        api.upload_file(
+            path_or_fileobj=meta_path,
+            path_in_repo=f"checkpoints/{checkpoint_name}.meta.json",
+            repo_id=repo_id,
+            repo_type="dataset",
+            commit_message=f"Meta epoch {epoch}: val_loss={val_loss:.4f}",
+        )
+
+        print(f"    -> Checkpoint uploaded to {repo_id} (epoch {epoch})", flush=True)
+    except Exception as e:
+        print(f"    -> Checkpoint upload failed: {e}", flush=True)
+
+
 # ── train ────────────────────────────────────────────────────────────────
 
 def cmd_train(args: argparse.Namespace) -> None:
@@ -161,10 +260,17 @@ def cmd_train(args: argparse.Namespace) -> None:
 
     os.makedirs(args.save_dir, exist_ok=True)
     best_val_loss = float("inf")
+    start_epoch = 1
     start_time = time.time()
+
+    # Resume from HF checkpoint if available
+    checkpoint_name = f"{args.run_name}-best_model.pt" if args.run_name else "best_model.pt"
+    start_epoch, best_val_loss = _try_resume_checkpoint(
+        model_ctrl, args.from_cache, checkpoint_name, args.save_dir)
+
     _log_memory("Before training")
 
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(start_epoch, args.epochs + 1):
         epoch_start = time.time()
         train_loss = model_ctrl.trainer.train_epoch(train_loader)
         val_loss = model_ctrl.trainer.validate(val_loader)
@@ -196,6 +302,8 @@ def cmd_train(args: argparse.Namespace) -> None:
             torch.save(model_ctrl.nn_model.state_dict(),
                        os.path.join(args.save_dir, "best_model.pt"))
             print(f"    -> Saved best model (val_loss={val_loss:.4f})", flush=True)
+            # Upload checkpoint to HF repo for crash resilience
+            _upload_checkpoint(args.from_cache, args.save_dir, checkpoint_name, epoch, val_loss)
 
         if epoch % 10 == 0:
             assert model_ctrl.nn_model is not None
