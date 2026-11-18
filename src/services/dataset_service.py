@@ -404,19 +404,27 @@ class DatasetService:
                   f"test={len(self._test_ds) if self._test_ds else 0}")
         return self
 
+    def _loader(self, ds: Dataset, batch_size: int, shuffle: bool,
+                num_workers: int) -> DataLoader:
+        is_iterable = isinstance(ds, IterableDataset)
+        # IterableDataset handles its own iteration; multiple workers would
+        # each download shards in parallel, blowing past ephemeral disk limits.
+        workers = 0 if is_iterable else num_workers
+        return DataLoader(ds, batch_size=batch_size,
+                          shuffle=shuffle and not is_iterable,
+                          collate_fn=collate_fn, num_workers=workers)
+
     def get_train_loader(self, batch_size: int, num_workers: int = 0) -> DataLoader:
         assert self._train_ds is not None, "Call load_*() and split() first"
-        is_iterable = isinstance(self._train_ds, IterableDataset)
-        return DataLoader(self._train_ds, batch_size=batch_size,
-                          shuffle=not is_iterable,  # IterableDataset shuffles internally
-                          collate_fn=collate_fn, num_workers=num_workers)
+        return self._loader(self._train_ds, batch_size, shuffle=True,
+                            num_workers=num_workers)
 
     def get_val_loader(self, batch_size: int, num_workers: int = 0) -> DataLoader:
         assert self._val_ds is not None, "Call load_*() and split() first"
-        return DataLoader(self._val_ds, batch_size=batch_size, shuffle=False,
-                          collate_fn=collate_fn, num_workers=num_workers)
+        return self._loader(self._val_ds, batch_size, shuffle=False,
+                            num_workers=num_workers)
 
     def get_test_loader(self, batch_size: int, num_workers: int = 0) -> DataLoader:
         assert self._test_ds is not None, "Call load_*() and split() first"
-        return DataLoader(self._test_ds, batch_size=batch_size, shuffle=False,
-                          collate_fn=collate_fn, num_workers=num_workers)
+        return self._loader(self._test_ds, batch_size, shuffle=False,
+                            num_workers=num_workers)
