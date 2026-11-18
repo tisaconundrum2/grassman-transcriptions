@@ -31,6 +31,8 @@
   .model-select select { padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid #444; background: #1a1a1a; color: #e0e0e0; font-size: 0.9rem; cursor: pointer; }
   .model-select select:focus { outline: none; border-color: #63b3ed; }
   .model-select label { color: #888; font-size: 0.85rem; margin-right: 0.5rem; }
+  .small-btn { padding: 0.5rem 1rem; font-size: 0.9rem; margin-left: 0.5rem; background: #2d3748; color: #e0e0e0; border: 1px solid #444; }
+  .small-btn:hover:not(:disabled) { background: #4a5568; }
 </style>
 </head>
 <body>
@@ -46,7 +48,10 @@
   <select id="modelSelect">
     <option value="grassmann-smol" selected>Grassmann (Plücker) — 11M</option>
     <option value="ablation-smol">Ablation (Symmetric) — 11M</option>
+    <option value="ablation-1750h">Ablation 1750h (Symmetric) — 11M</option>
   </select>
+  <button id="onnxBtn" class="small-btn">Load local .onnx</button>
+  <input type="file" id="onnxInput" accept=".onnx">
 </div>
 
 <div class="loader" id="loader">Loading model...</div>
@@ -77,6 +82,11 @@ const MODELS = {
     name: 'Ablation (Symmetric)',
     url: 'asr-models/ablation-smol.onnx',
     size: '49 MB',
+  },
+  'ablation-1750h': {
+    name: 'Ablation 1750h (Symmetric)',
+    url: 'asr-models/ablation-1750h.onnx',
+    size: '48 MB',
   },
 };
 
@@ -260,9 +270,9 @@ async function transcribe(audioBuffer) {
       if (!chunkMel) continue;
       const tensor = new ort.Tensor('float32', chunkMel.data, [1, chunkMel.nMels, chunkMel.numFrames]);
       const t0 = performance.now();
-      const results = await session.run({ mel: tensor });
+      const results = await session.run({ [session.inputNames[0]]: tensor });
       totalInference += performance.now() - t0;
-      const lp = results.log_probs;
+      const lp = results[session.outputNames[0]];
       // ONNX output shape: [batch=1, T', vocab=29]
       texts.push(ctcDecode(lp.data, lp.dims[1], lp.dims[2]));
     }
@@ -277,10 +287,10 @@ async function transcribe(audioBuffer) {
 
   const tensor = new ort.Tensor('float32', mel.data, [1, mel.nMels, mel.numFrames]);
   const t0 = performance.now();
-  const results = await session.run({ mel: tensor });
+  const results = await session.run({ [session.inputNames[0]]: tensor });
   const elapsed = performance.now() - t0;
 
-  const logProbs = results.log_probs;
+  const logProbs = results[session.outputNames[0]];
   // ONNX output shape: [batch=1, T', vocab=29]
   const outFrames = logProbs.dims[1];
   const vocabSize = logProbs.dims[2];
@@ -362,37 +372,64 @@ fileInput.addEventListener('change', async (e) => {
 
 // ── Load model ──────────────────────────────────────────────────────────
 
-async function loadModel(modelId) {
+// source: URL string or Uint8Array of a local .onnx file
+async function loadSession(name, source, sizeLabel) {
   const loader = document.getElementById('loader');
   const status = document.getElementById('status');
-  const model = MODELS[modelId];
-  if (!model) return;
 
   recordBtn.disabled = true;
   fileBtn.disabled = true;
   session = null;
-  currentModelId = modelId;
 
-  loader.textContent = 'Loading ' + model.name + ' (' + model.size + ')...';
+  loader.textContent = 'Loading ' + name + ' (' + sizeLabel + ')...';
   loader.classList.add('active');
-  status.textContent = 'Loading ' + model.name + '...';
+  status.textContent = 'Loading ' + name + '...';
 
   try {
-    session = await ort.InferenceSession.create(model.url, {
+    session = await ort.InferenceSession.create(source, {
       executionProviders: ['wasm'],
     });
-    status.textContent = model.name + ' ready. Record or upload audio.';
+    status.textContent = name + ' ready. Record or upload audio.';
     recordBtn.disabled = false;
     fileBtn.disabled = false;
   } catch (e) {
-    status.textContent = 'Failed to load ' + model.name + ': ' + e.message;
+    status.textContent = 'Failed to load ' + name + ': ' + e.message;
     console.error(e);
   }
   loader.classList.remove('active');
 }
 
+async function loadModel(modelId) {
+  const model = MODELS[modelId];
+  if (!model) return;
+  currentModelId = modelId;
+  await loadSession(model.name, model.url, model.size);
+}
+
 const modelSelect = document.getElementById('modelSelect');
-modelSelect.addEventListener('change', () => loadModel(modelSelect.value));
+modelSelect.addEventListener('change', () => {
+  if (modelSelect.value !== 'local') loadModel(modelSelect.value);
+});
+
+const onnxBtn = document.getElementById('onnxBtn');
+const onnxInput = document.getElementById('onnxInput');
+onnxBtn.addEventListener('click', () => onnxInput.click());
+onnxInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  onnxInput.value = '';
+  if (!file) return;
+  let opt = modelSelect.querySelector('option[value="local"]');
+  if (!opt) {
+    opt = document.createElement('option');
+    opt.value = 'local';
+    modelSelect.appendChild(opt);
+  }
+  opt.textContent = 'Local: ' + file.name;
+  modelSelect.value = 'local';
+  currentModelId = 'local';
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  await loadSession(file.name, bytes, (file.size / 1e6).toFixed(0) + ' MB');
+});
 
 (async () => {
   await loadModel(currentModelId);

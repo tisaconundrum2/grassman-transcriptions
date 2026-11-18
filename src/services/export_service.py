@@ -94,6 +94,7 @@ def export_ctc(model, config: GrassmannConfig, output_dir: str, opset: int = 18)
         input_names=["mel"], output_names=["log_probs"],
         dynamic_axes={"mel": {0: "batch", 2: "time"}, "log_probs": {0: "batch", 1: "time"}},
         opset_version=opset,
+        external_data=False,  # single self-contained .onnx (needed for browser upload)
     )
 
 
