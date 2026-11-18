@@ -69,6 +69,8 @@ pip install 'huggingface_hub>=1.8'
 hf auth login
 ```
 
+All jobs use a single Docker image: `ghcr.io/tisaconundrum2/grassmann:latest`
+
 ### Step 1: Cache mel spectrograms (one-time, CPU)
 
 ```bash
@@ -77,18 +79,16 @@ hf jobs run \
   --timeout 6h \
   --name cache-1750h \
   -s HF_TOKEN \
-  registry.hf.space/tisaconundrum-grassmann-cache:latest \
+  ghcr.io/tisaconundrum2/grassmann:latest \
   -- python -u app.py cache \
     --recipe 1750h \
     --cache-dir mel_cache \
     --repo tisaconundrum/grassmann-mel-cache
 ```
 
-This streams ~280K audio samples from 5 datasets, computes mel spectrograms, and uploads shards incrementally to `tisaconundrum/grassmann-mel-cache`. Progress survives container restarts — each shard uploads as it fills.
-
 ### Step 2: Train (GPU)
 
-**Grassmann (Plücker mixer):**
+**Smol Grassmann (100h, Plücker mixer):**
 ```bash
 hf jobs run \
   --flavor t4-small \
@@ -97,7 +97,7 @@ hf jobs run \
   --name smol-grassmann \
   -s HF_TOKEN \
   --detach \
-  registry.hf.space/tisaconundrum-grassmann-transcription:latest \
+  ghcr.io/tisaconundrum2/grassmann:latest \
   -- python -u app.py train \
     --from-cache tisaconundrum/grassmann-mel-cache \
     --max-samples 28539 \
@@ -106,7 +106,7 @@ hf jobs run \
     --run-name smol-grassmann --save-dir checkpoints --decode-every 5
 ```
 
-**Ablation (symmetric mixer — no Grassmann geometry):**
+**Smol Ablation (100h, symmetric mixer):**
 ```bash
 hf jobs run \
   --flavor t4-small \
@@ -115,13 +115,30 @@ hf jobs run \
   --name smol-ablation \
   -s HF_TOKEN \
   --detach \
-  registry.hf.space/tisaconundrum-grassmann-ablation:latest \
+  ghcr.io/tisaconundrum2/grassmann:latest \
   -- python -u app.py train \
     --from-cache tisaconundrum/grassmann-mel-cache \
     --max-samples 28539 \
     --epochs 50 --batch-size 32 --layers 6 --d-model 256 --r-reduced 32 --lr 3e-4 \
     --ctc --conformer --two-sided --ablation \
     --run-name smol-ablation --save-dir checkpoints --decode-every 5
+```
+
+**Ablation 1750h (full cache, symmetric mixer):**
+```bash
+hf jobs run \
+  --flavor t4-small \
+  --timeout 24h \
+  --attempts 3 \
+  --name ablation-1750h \
+  -s HF_TOKEN \
+  --detach \
+  ghcr.io/tisaconundrum2/grassmann:latest \
+  -- python -u app.py train \
+    --from-cache tisaconundrum/grassmann-mel-cache \
+    --epochs 30 --batch-size 32 --layers 6 --d-model 256 --r-reduced 32 --lr 3e-4 \
+    --ctc --conformer --two-sided --ablation \
+    --run-name ablation-1750h --save-dir checkpoints --decode-every 5
 ```
 
 ### Step 3: Monitor
@@ -148,18 +165,22 @@ hf jobs list                               # List all jobs
 
 Best model weights upload to `tisaconundrum/grassmann-mel-cache` under `checkpoints/{run_name}-best_model.pt` every time val_loss improves. On restart (or `--attempts` retry), training resumes from the last uploaded checkpoint automatically.
 
-### Docker images
+### Docker image
 
-Space repos auto-build images at `registry.hf.space/<owner>-<space>:latest`:
-- `tisaconundrum-grassmann-transcription` — Grassmann (Plücker) mixer
-- `tisaconundrum-grassmann-ablation` — Symmetric product mixer
-- `tisaconundrum-grassmann-cache` — CPU caching job
+One image for all jobs, built by GitHub Actions and pushed to GHCR:
+
+```
+ghcr.io/tisaconundrum2/grassmann:latest
+```
+
+The command passed to `hf jobs run` determines what it does (train, cache, eval, etc.).
 
 ### Cost
 
 | Config | Hardware | Time | Cost |
 |--------|----------|------|------|
 | Smol (11M, 100h, 50 epochs) | T4 small | ~9h | ~$3.60 |
+| Ablation 1750h (11M, all cache, 30 epochs) | T4 small | ~24h+ | ~$9.60 |
 | Cache (1750h recipe) | CPU basic | ~4h | ~$0.04 |
 
 ## Project Structure

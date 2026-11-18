@@ -22,18 +22,6 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - name: grassmann-transcription
-            dockerfile: Dockerfile.grassman
-          - name: grassmann-ablation
-            dockerfile: Dockerfile.ablation
-          - name: grassmann-cache
-            dockerfile: Dockerfile.cache
-          - name: grassmann-ablation-1750h
-            dockerfile: Dockerfile.ablation-1750h
-
     steps:
       - uses: actions/checkout@v4
 
@@ -51,10 +39,10 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
+          file: Dockerfile
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.name }}:latest
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.name }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/grassmann:latest
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/grassmann:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
