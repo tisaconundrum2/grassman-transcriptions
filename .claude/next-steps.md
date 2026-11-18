@@ -1,6 +1,7 @@
 # Next Steps Plan
 
 ## Completed Run (Smol - 11M)
+
 - **Status**: COMPLETE — 50 epochs on train.clean.100 (~28K samples, 100 hours)
 - **Config**: 6L Conformer-CTC, d=256, r=32, batch 32, lr 3e-4, 50 epochs
 - **Hardware**: T4-small ($0.40/hr), GPU using only 0.2/0.3 GB of 16 GB
@@ -16,15 +17,17 @@
 ---
 
 ## Iteration 1: Evaluate Smol Results
+
 - [ ] Compute WER on LibriSpeech test-clean using saved Smol checkpoint
 - [ ] Measure greedy WER, then beam search WER (retroactive from checkpoint)
 - [ ] Write up results for LinkedIn post
 
 ## Iteration 2: Medium + 960h + Beam Search (The Real Run)
+
 Skip incremental steps — scale model, data, and decoding simultaneously.
 
 | | Smol (completed) | Medium (next) |
-|--|--|--|
+| -- | -- | -- |
 | Params | 11M | ~50M |
 | Data | 100h | 960h (full LibriSpeech) |
 | Decoding | Greedy | Beam search + LM |
@@ -39,7 +42,9 @@ Skip incremental steps — scale model, data, and decoding simultaneously.
 ### Pre-launch TODO (3 pieces of work)
 
 #### 1. Multi-split data loading
+
 Concatenate all three LibriSpeech training splits:
+
 ```
 train.clean.100  →  28K samples  (100h)
 train.clean.360  → 104K samples  (360h)
@@ -47,26 +52,30 @@ train.other.500  → 148K samples  (500h)
 ─────────────────────────────────────────
 Total:             280K samples  (960h)
 ```
+
 - [ ] Update `train_gpu.py` to accept multiple splits
 - [ ] Stream and concatenate all three splits
 - [ ] DiskCachedDataset already exists; need HDF5 single-file cache for 280K samples
 - [ ] Length-sorted bucketing to eliminate padding waste
 
 #### 2. Beam search decoder
+
 - [ ] Add `beam_decode()` alongside current greedy `predict()`
 - [ ] Use `pyctcdecode` (wraps KenLM, does CTC beam search out of the box)
 - [ ] Train or download a character n-gram LM for English
 - [ ] Beam search is decode-time only — no retraining needed, applies to Smol too
 
 #### 3. WER computation in training loop
+
 - [ ] Add `jiwer` for proper WER/CER metrics during validation
 - [ ] Log WER alongside loss each epoch
 
 ## Iteration 4: Multi-Dataset Training
+
 Add normalized external datasets for more acoustic diversity:
 
 | Dataset | Hours | Normalization |
-|---------|-------|---------------|
+| --------- | ------- | --------------- |
 | LibriSpeech 960h | 960 | None needed |
 | Common Voice 17 (en) | ~2,800 | lowercase + strip punct |
 | VoxPopuli (en) | 543 | lowercase + strip punct |
@@ -74,6 +83,7 @@ Add normalized external datasets for more acoustic diversity:
 | SPGISpeech | 5,000 | lowercase + strip punct |
 
 Normalization function:
+
 ```python
 def normalize_transcript(text: str) -> str:
     text = text.lower().strip()
@@ -87,7 +97,7 @@ def normalize_transcript(text: str) -> str:
 ## Model Scaling Ladder
 
 | Tier | Name | Params | d_model | Layers | r | ONNX Size | GPU Est. | Time/Epoch | 50 Epochs | Cost |
-|------|------|--------|---------|--------|---|-----------|----------|------------|-----------|------|
+| ------ | ------ | -------- | --------- | -------- | --- | ----------- | ---------- | ------------ | ----------- | ------ |
 | S | Smol | 11M | 256 | 6 | 32 | ~46 MB | 0.3 GB | ~13 min | ~11 hrs | ~$4 (T4) |
 | S+ | Smol+ | 26M | 256 | 15 | 32 | ~105 MB | ~0.8 GB | ~30 min | ~25 hrs | ~$10 (T4) |
 | M | Medium | 50M | 512 | 12 | 64 | ~200 MB | ~2 GB | ~55 min | ~46 hrs | ~$18 (T4) |
@@ -104,6 +114,7 @@ ONNX sizes are ~4x parameter count (fp32) or ~2x (fp16 quantized).
 ## Architecture Improvements (After Baseline)
 
 ### High Impact
+
 - [ ] **BPE Tokenizer** — fewer output steps = better CTC alignment (already implemented, not enabled)
 - [ ] **SpecAugment** — data augmentation (time/freq masking) for free regularization
 - [ ] **Length-sorted bucketing** — eliminate padding waste, allow larger effective batch sizes
@@ -111,11 +122,13 @@ ONNX sizes are ~4x parameter count (fp32) or ~2x (fp16 quantized).
 - [ ] **Gradient accumulation** — simulate larger batch sizes without more GPU memory
 
 ### Medium Impact
+
 - [ ] **Beam search + LM** — external character/word LM at decode time
 - [ ] **BPE tokenizer** with 1000-5000 vocab for CTC
 - [ ] **Warm-start from Smol** — initialize Medium's first 6 layers from Smol weights
 
 ### Research Questions
+
 - [ ] Does two-sided vs causal actually matter for CTC? (Dhruv's question)
 - [ ] Does the Grassmann geometry help, or is it just the multiplicative mixing? (Dhruv's symmetric control)
 - [ ] How does WER scale with model size? (Smol → Medium → Large)
@@ -126,6 +139,7 @@ ONNX sizes are ~4x parameter count (fp32) or ~2x (fp16 quantized).
 ## Infrastructure Improvements
 
 ### Already Done
+
 - [x] Health server on port 7860 (prevents HF Spaces timeout kill)
 - [x] Artifact upload to HF repo (ONNX + model bundle)
 - [x] Auto-pause after training (stops billing)
@@ -136,6 +150,7 @@ ONNX sizes are ~4x parameter count (fp32) or ~2x (fp16 quantized).
 - [x] DiskCachedDataset (for future large-data runs)
 
 ### TODO
+
 - [ ] **Migrate from HF Spaces to HF Jobs** — per-second billing, no health server hack, persistent storage
   - Spaces bills full GPU rate even during CPU-only caching (~$1 wasted per run)
   - Jobs: `hf jobs run --flavor t4-small <image> python train_gpu.py ...`
@@ -150,14 +165,14 @@ ONNX sizes are ~4x parameter count (fp32) or ~2x (fp16 quantized).
 - [ ] **Checkpointing to HF repo** — save best model mid-training (not just at end)
 - [ ] **WER computation** — add jiwer/evaluate for proper WER/CER metrics in training loop
 - [ ] **TensorBoard / W&B logging** — loss curves, LR schedule, sample transcriptions
-- [x] **Multi-split streaming** — load train.clean.100 + train.clean.360 + train.other.500 
-1   
+- [x] **Multi-split streaming** — load train.clean.100 + train.clean.360 + train.other.500
+
 ---
 
 ## WER Targets
 
 | WER | What it means |
-|-----|---------------|
+| ----- | --------------- |
 | >60% | Model outputting mostly noise |
 | 30-50% | Learned phonetic patterns, garbled words |
 | 15-30% | Genuinely impressive for 11M params + no LM |
