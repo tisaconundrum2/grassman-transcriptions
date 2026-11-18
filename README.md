@@ -35,9 +35,9 @@ python app.py demo
 python app.py train --dataset openslr/librispeech_asr \
   --split train.clean.100 --max-samples 500 --epochs 10
 
-# Train from pre-cached mels (fastest — skips caching on GPU)
+# Train from pre-cached mels (streams shards from HF Hub, no disk needed)
 python app.py train --from-cache tisaconundrum/grassmann-mel-cache \
-  --epochs 50 --batch-size 32 --ctc --conformer --two-sided
+  --epochs 50 --batch-size 128 --ctc --conformer --two-sided
 
 # Cache dataset on CPU, upload to HF Hub
 python app.py cache --recipe 1750h --repo tisaconundrum/grassmann-mel-cache
@@ -61,6 +61,8 @@ Runs entirely in the browser via ONNX + WASM. 11M params, 120x real-time on 16mi
 ## GPU Training on HF Jobs
 
 Training runs on [HF Jobs](https://huggingface.co/docs/hub/en/jobs) — per-second GPU billing, persistent secrets, auto-retry on failure. **Do not use HF Spaces for training** (ephemeral disk, health check kills, secrets require restarts).
+
+Features: AMP (mixed precision) auto-enabled on GPU, shard streaming with one-ahead prefetch (zero disk unpack), checkpoint resume from HF Hub.
 
 ### Setup
 
@@ -124,7 +126,7 @@ hf jobs run \
     --run-name smol-ablation --save-dir checkpoints --decode-every 5
 ```
 
-**Ablation 1750h (full cache, symmetric mixer):**
+**Ablation 1750h (full cache, symmetric mixer, AMP + streaming):**
 ```bash
 hf jobs run \
   --flavor t4-small \
@@ -136,10 +138,12 @@ hf jobs run \
   ghcr.io/tisaconundrum2/grassmann:latest \
   -- python -u app.py train \
     --from-cache tisaconundrum/grassmann-mel-cache \
-    --epochs 30 --batch-size 32 --layers 6 --d-model 256 --r-reduced 32 --lr 3e-4 \
+    --epochs 20 --batch-size 128 --layers 6 --d-model 256 --r-reduced 32 --lr 3e-4 \
     --ctc --conformer --two-sided --ablation \
     --run-name ablation-1750h --save-dir checkpoints --decode-every 5
 ```
+
+> **Note:** `--from-cache` streams shards directly from HF Hub with one-shard-ahead prefetch — no disk unpack needed. Batch 128 is the max for T4 (15GB VRAM). AMP is auto-enabled on GPU.
 
 ### Step 3: Monitor
 
@@ -153,11 +157,12 @@ hf jobs list                               # List all jobs
 
 | Flag | Purpose |
 |------|---------|
-| `--from-cache <repo>` | Pull pre-cached mel shards from HF Dataset repo |
+| `--from-cache <repo>` | Stream pre-cached mel shards from HF Dataset repo (zero disk) |
 | `--max-samples <n>` | Subset of cached data (28539 = train.clean.100) |
 | `--ablation` | Swap Plücker for symmetric products |
 | `--run-name <name>` | Prefix for saved artifacts (avoids collisions) |
 | `--recipe <name>` | Dataset recipe from `recipes.yaml` |
+| `--workers <n>` | DataLoader num_workers (ignored for streaming) |
 | `-s HF_TOKEN` | Pass HF token as secret (for checkpoint uploads) |
 | `--attempts 3` | Auto-retry on failure (checkpoints resume from Hub) |
 
@@ -179,9 +184,12 @@ The command passed to `hf jobs run` determines what it does (train, cache, eval,
 
 | Config | Hardware | Time | Cost |
 |--------|----------|------|------|
-| Smol (11M, 100h, 50 epochs) | T4 small | ~9h | ~$3.60 |
-| Ablation 1750h (11M, all cache, 30 epochs) | T4 small | ~24h+ | ~$9.60 |
+| Smol (11M, 100h, 50 epochs, fp32) | T4 small | ~9h | ~$3.60 |
+| Smol (11M, 100h, 50 epochs, AMP) | T4 small | ~4.2h | ~$1.70 |
+| Ablation 1750h (11M, 20 epochs, AMP + streaming) | T4 small | ~14h | ~$8.40 |
 | Cache (1750h recipe) | CPU basic | ~4h | ~$0.04 |
+
+> AMP (mixed precision) gives ~1.8x speedup on T4. Shard streaming with prefetch hides most download overhead.
 
 ## Project Structure
 
