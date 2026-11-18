@@ -234,10 +234,14 @@ def cmd_train(args: argparse.Namespace) -> None:
     cache = CacheRepository(cache_dir)
     dataset = DatasetService(repo, cache)
 
-    if args.from_cache:
+    if args.from_cache and args.max_samples:
+        # Small subset: download and unpack to disk (fits in 50GB)
         dataset.load_from_hub_cache(args.from_cache,
                                     max_samples=args.max_samples).clean().preprocess().split(
             max_samples=args.max_samples)
+    elif args.from_cache:
+        # Full dataset: stream shards from Hub (no disk unpack needed)
+        dataset.load_from_hub_streaming(args.from_cache).clean().preprocess().split()
     elif args.recipe:
         dataset.load_recipe(args.recipe,
                             max_samples_per_source=args.max_per_source).clean().preprocess().split()
