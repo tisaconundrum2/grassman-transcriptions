@@ -46,6 +46,10 @@ class TrainingService:
         self.ctc_loss = nn.CTCLoss(blank=0, zero_infinity=True)
         self.history: list[TrainMetrics] = []
 
+        # AMP: mixed precision for faster training on GPU
+        self.use_amp = self.device.type == "cuda"
+        self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
+
     def set_cosine_schedule(self, epochs: int, warmup_epochs: int = 2) -> None:
         """Add cosine annealing LR schedule with linear warmup."""
         from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
@@ -67,15 +71,17 @@ class TrainingService:
 
             self.optimizer.zero_grad()
 
-            log_probs = self.model(mels)  # (T', B, vocab)
-            output_lengths = self.model.get_output_lengths(mel_lengths)
-
-            loss = self.ctc_loss(log_probs, tokens, output_lengths, token_lengths)
+            with torch.amp.autocast("cuda", enabled=self.use_amp):
+                log_probs = self.model(mels)  # (T', B, vocab)
+                output_lengths = self.model.get_output_lengths(mel_lengths)
+                loss = self.ctc_loss(log_probs, tokens, output_lengths, token_lengths)
 
             if torch.isfinite(loss):
-                loss.backward()
+                self.scaler.scale(loss).backward()
+                self.scaler.unscale_(self.optimizer)
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5.0)
-                self.optimizer.step()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
                 total_loss += loss.item()
                 n_batches += 1
 
@@ -97,10 +103,11 @@ class TrainingService:
             mel_lengths = mel_lengths.to(self.device)
             token_lengths = token_lengths.to(self.device)
 
-            log_probs = self.model(mels)
-            output_lengths = self.model.get_output_lengths(mel_lengths)
+            with torch.amp.autocast("cuda", enabled=self.use_amp):
+                log_probs = self.model(mels)
+                output_lengths = self.model.get_output_lengths(mel_lengths)
+                loss = self.ctc_loss(log_probs, tokens, output_lengths, token_lengths)
 
-            loss = self.ctc_loss(log_probs, tokens, output_lengths, token_lengths)
             if torch.isfinite(loss):
                 total_loss += loss.item()
                 n_batches += 1
