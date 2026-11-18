@@ -97,17 +97,16 @@ class ShardStreamingDataset(IterableDataset):
         return self._total
 
     @staticmethod
-    def _download_shard(repo_id: str, shard_name: str,
-                        token: str | None) -> tuple[list, str]:
-        """Download and load a shard. Returns (samples, tmp_dir)."""
+    def _download_shard_file(repo_id: str, shard_name: str,
+                             token: str | None) -> tuple[str, str]:
+        """Download a shard file to disk only (no torch.load). Returns (local_path, tmp_dir)."""
         from huggingface_hub import hf_hub_download
         tmp_cache = tempfile.mkdtemp(prefix="hf_shard_")
         local_path = hf_hub_download(
             repo_id, shard_name, repo_type="dataset",
             token=token, cache_dir=tmp_cache,
         )
-        shard_data = torch.load(local_path, weights_only=True, map_location="cpu")
-        return shard_data, tmp_cache
+        return local_path, tmp_cache
 
     def __iter__(self):
         from concurrent.futures import ThreadPoolExecutor, Future
@@ -122,24 +121,25 @@ class ShardStreamingDataset(IterableDataset):
         prefetch: Future | None = None
 
         try:
-            # Kick off first shard download
+            # Kick off first shard download (file only, not loaded into RAM)
             if shards:
                 prefetch = executor.submit(
-                    self._download_shard, self._repo_id, shards[0], token)
+                    self._download_shard_file, self._repo_id, shards[0], token)
 
             for i, shard_name in enumerate(shards):
                 if self._max_samples and yielded >= self._max_samples:
                     break
 
-                # Wait for current shard
-                shard_data, tmp_dir = prefetch.result()
+                # Wait for current shard file to finish downloading
+                local_path, tmp_dir = prefetch.result()
 
-                # Prefetch next shard while we yield current
+                # Prefetch next shard file while we process current
                 if i + 1 < len(shards):
                     prefetch = executor.submit(
-                        self._download_shard, self._repo_id, shards[i + 1], token)
+                        self._download_shard_file, self._repo_id, shards[i + 1], token)
 
-                # Clean up downloaded shard files immediately
+                # NOW load into RAM (only one shard's data in memory at a time)
+                shard_data = torch.load(local_path, weights_only=True, map_location="cpu")
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 
                 if self._shuffle:
