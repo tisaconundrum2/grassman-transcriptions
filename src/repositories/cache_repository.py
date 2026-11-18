@@ -235,65 +235,6 @@ class CacheRepository:
             pt = self._cache_dir / f"{idx}.pt"
             pt.unlink(missing_ok=True)
 
-    def download_from_hub(self, repo_id: str, max_samples: int | None = None) -> int:
-        """Download pre-cached mel shards from a HF Dataset repo and unpack to .pt files.
-
-        When max_samples is set, stops unpacking once enough samples are
-        available — avoids downloading all shards when only a subset is needed.
-
-        Returns the total number of unpacked samples.
-        """
-        from huggingface_hub import hf_hub_download, list_repo_files
-
-        if self.exists():
-            n = self.count()
-            if max_samples is None or n >= max_samples:
-                print(f"  Found {n} cached samples in {self._cache_dir}, skipping download.")
-                return n
-
-        self._cache_dir.mkdir(parents=True, exist_ok=True)
-        existing = self.count()
-        if max_samples:
-            print(f"  Downloading up to {max_samples} samples from {repo_id}...")
-        else:
-            print(f"  Downloading mel cache from {repo_id}...")
-
-        token = _hf_token()
-        files = list_repo_files(repo_id, repo_type="dataset", token=token)
-        shard_files = sorted(f for f in files if f.startswith("shard_") and f.endswith(".pt"))
-        print(f"  Found {len(shard_files)} shards")
-
-        import shutil
-        import tempfile
-
-        sample_idx = existing
-        for shard_name in shard_files:
-            if max_samples and sample_idx >= max_samples:
-                break
-            # Use a temp cache dir so we can nuke all HF cache artifacts after
-            # each shard — the default cache keeps blobs, refs, and snapshots
-            # that add up to 345GB across 46 shards.
-            tmp_cache = tempfile.mkdtemp(prefix="hf_shard_")
-            try:
-                local_path = hf_hub_download(
-                    repo_id, shard_name, repo_type="dataset",
-                    token=token, cache_dir=tmp_cache,
-                )
-                shard_data = torch.load(local_path, weights_only=True, map_location="cpu")
-                for mel, tokens in shard_data:
-                    if max_samples and sample_idx >= max_samples:
-                        break
-                    torch.save((mel, tokens), self._cache_dir / f"{sample_idx}.pt")
-                    sample_idx += 1
-                del shard_data
-                gc.collect()
-            finally:
-                shutil.rmtree(tmp_cache, ignore_errors=True)
-            print(f"    Unpacked {shard_name} -> {sample_idx} samples total")
-
-        print(f"  Downloaded and unpacked {sample_idx} samples to {self._cache_dir}")
-        return sample_idx
-
     def upload_to_hub(self, repo_id: str, samples_per_shard: int = 50000) -> None:
         """Pack cached .pt files into shards and upload to a HF Dataset repo."""
         import json
