@@ -78,11 +78,10 @@ class HFAudioDataset(Dataset):
 
 
 class ShardStreamingDataset(IterableDataset):
-    """Streams mel shards directly from HF Hub — zero disk accumulation.
+    """Streams mel shards directly from HF Hub with one-shard-ahead prefetch.
 
-    Downloads one shard at a time to a tempdir, loads samples into memory,
-    yields them, then deletes the tempdir before moving to the next shard.
-    Peak disk usage: one shard (~7.5GB) at a time.
+    While the GPU trains on shard N, a background thread downloads shard N+1.
+    Peak disk usage: two shards (~15GB) at a time.
     """
 
     def __init__(self, repo_id: str, shard_files: list[str],
@@ -97,8 +96,21 @@ class ShardStreamingDataset(IterableDataset):
     def __len__(self) -> int:
         return self._total
 
-    def __iter__(self):
+    @staticmethod
+    def _download_shard(repo_id: str, shard_name: str,
+                        token: str | None) -> tuple[list, str]:
+        """Download and load a shard. Returns (samples, tmp_dir)."""
         from huggingface_hub import hf_hub_download
+        tmp_cache = tempfile.mkdtemp(prefix="hf_shard_")
+        local_path = hf_hub_download(
+            repo_id, shard_name, repo_type="dataset",
+            token=token, cache_dir=tmp_cache,
+        )
+        shard_data = torch.load(local_path, weights_only=True, map_location="cpu")
+        return shard_data, tmp_cache
+
+    def __iter__(self):
+        from concurrent.futures import ThreadPoolExecutor, Future
         token = os.environ.get("HF_TOKEN")
 
         shards = list(self._shard_files)
@@ -106,31 +118,43 @@ class ShardStreamingDataset(IterableDataset):
             random.shuffle(shards)
 
         yielded = 0
-        for shard_name in shards:
-            if self._max_samples and yielded >= self._max_samples:
-                break
+        executor = ThreadPoolExecutor(max_workers=1)
+        prefetch: Future | None = None
 
-            tmp_cache = tempfile.mkdtemp(prefix="hf_shard_")
-            try:
-                local_path = hf_hub_download(
-                    self._repo_id, shard_name, repo_type="dataset",
-                    token=token, cache_dir=tmp_cache,
-                )
-                shard_data = torch.load(local_path, weights_only=True, map_location="cpu")
-            finally:
-                shutil.rmtree(tmp_cache, ignore_errors=True)
+        try:
+            # Kick off first shard download
+            if shards:
+                prefetch = executor.submit(
+                    self._download_shard, self._repo_id, shards[0], token)
 
-            if self._shuffle:
-                random.shuffle(shard_data)
-
-            for mel, tokens in shard_data:
+            for i, shard_name in enumerate(shards):
                 if self._max_samples and yielded >= self._max_samples:
                     break
-                yield mel, tokens
-                yielded += 1
 
-            del shard_data
-            gc.collect()
+                # Wait for current shard
+                shard_data, tmp_dir = prefetch.result()
+
+                # Prefetch next shard while we yield current
+                if i + 1 < len(shards):
+                    prefetch = executor.submit(
+                        self._download_shard, self._repo_id, shards[i + 1], token)
+
+                # Clean up downloaded shard files immediately
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+
+                if self._shuffle:
+                    random.shuffle(shard_data)
+
+                for mel, tokens in shard_data:
+                    if self._max_samples and yielded >= self._max_samples:
+                        break
+                    yield mel, tokens
+                    yielded += 1
+
+                del shard_data
+                gc.collect()
+        finally:
+            executor.shutdown(wait=False)
 
 
 def collate_fn(
