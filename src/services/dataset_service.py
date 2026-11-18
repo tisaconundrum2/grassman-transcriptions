@@ -279,17 +279,17 @@ class DatasetService:
                   f"test={len(self._test_ds) if self._test_ds else 0}")
         return self
 
-    def get_train_loader(self, batch_size: int) -> DataLoader:
+    def get_train_loader(self, batch_size: int, num_workers: int = 0) -> DataLoader:
         assert self._train_ds is not None, "Call load_*() and split() first"
         return DataLoader(self._train_ds, batch_size=batch_size, shuffle=True,
-                          collate_fn=collate_fn, num_workers=0)
+                          collate_fn=collate_fn, num_workers=num_workers)
 
-    def get_val_loader(self, batch_size: int) -> DataLoader:
+    def get_val_loader(self, batch_size: int, num_workers: int = 0) -> DataLoader:
         assert self._val_ds is not None, "Call load_*() and split() first"
         return DataLoader(self._val_ds, batch_size=batch_size, shuffle=False,
-                          collate_fn=collate_fn, num_workers=0)
+                          collate_fn=collate_fn, num_workers=num_workers)
 
-    def get_test_loader(self, batch_size: int) -> DataLoader:
+    def get_test_loader(self, batch_size: int, num_workers: int = 0) -> DataLoader:
         assert self._test_ds is not None, "Call load_*() and split() first"
         return DataLoader(self._test_ds, batch_size=batch_size, shuffle=False,
-                          collate_fn=collate_fn, num_workers=0)
+                          collate_fn=collate_fn, num_workers=num_workers)

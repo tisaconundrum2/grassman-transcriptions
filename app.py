@@ -255,8 +255,9 @@ def cmd_train(args: argparse.Namespace) -> None:
     assert model_ctrl.trainer is not None
     model_ctrl.trainer.set_cosine_schedule(args.epochs, warmup_epochs=min(3, args.epochs // 5))
 
-    train_loader = dataset.get_train_loader(config.batch_size)
-    val_loader = dataset.get_val_loader(config.batch_size)
+    num_workers = getattr(args, 'workers', 0)
+    train_loader = dataset.get_train_loader(config.batch_size, num_workers=num_workers)
+    val_loader = dataset.get_val_loader(config.batch_size, num_workers=num_workers)
 
     os.makedirs(args.save_dir, exist_ok=True)
     best_val_loss = float("inf")
@@ -316,7 +317,7 @@ def cmd_train(args: argparse.Namespace) -> None:
     assert model_ctrl.nn_model is not None
     torch.save(model_ctrl.nn_model.state_dict(), os.path.join(args.save_dir, "final_model.pt"))
 
-    test_loader = dataset.get_test_loader(config.batch_size)
+    test_loader = dataset.get_test_loader(config.batch_size, num_workers=num_workers)
     test_loss = model_ctrl.trainer.validate(test_loader)
     total_time = time.time() - start_time
 
@@ -578,6 +579,7 @@ def main() -> None:
     p.add_argument("--save-dir", default="checkpoints")
     p.add_argument("--run-name", default=None, help="Prefix for uploaded artifacts (e.g. 'ablation-smol')")
     p.add_argument("--decode-every", type=int, default=5)
+    p.add_argument("--workers", type=int, default=0, help="DataLoader num_workers (0=main process)")
     _add_model_args(p)
 
     # cache
