@@ -31,6 +31,8 @@ jobs:
             dockerfile: Dockerfile.ablation
           - name: grassmann-cache
             dockerfile: Dockerfile.cache
+          - name: grassmann-ablation-1750h
+            dockerfile: Dockerfile.ablation-1750h
 
     steps:
       - uses: actions/checkout@v4
