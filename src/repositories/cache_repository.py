@@ -275,6 +275,16 @@ class CacheRepository:
                 torch.save((mel, tokens), self._cache_dir / f"{sample_idx}.pt")
                 sample_idx += 1
             del shard_data
+            gc.collect()
+            # Delete the downloaded shard from HF cache to free disk space
+            # (each shard is ~7.5GB; keeping all 46 blows past 50GB ephemeral limit)
+            try:
+                real = os.path.realpath(local_path)
+                os.remove(local_path)   # remove symlink/pointer
+                if real != local_path and os.path.exists(real):
+                    os.remove(real)      # remove the actual blob
+            except OSError:
+                pass
             print(f"    Unpacked {shard_name} -> {sample_idx} samples total")
 
         print(f"  Downloaded and unpacked {sample_idx} samples to {self._cache_dir}")
