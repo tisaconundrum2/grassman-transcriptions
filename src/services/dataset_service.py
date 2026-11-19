@@ -6,26 +6,24 @@ Delegates external data access to repositories:
   - CacheRepository: disk cache read/write, HF shard upload/download
 
 Supports three data modes:
-  - Disk cache: download shards, unpack to .pt files (small subsets)
-  - Shard streaming: download shards on-the-fly each epoch (large datasets)
+  - Pre-cached shards via an IShardRepository (local/mounted, Hub, prefetch)
+  - Disk cache: raw datasets cached to .pt files (load_recipe)
   - Direct HF: stream or download from HuggingFace datasets
 """
 
 from __future__ import annotations
 
-import gc
-import os
 import random
-import shutil
-import tempfile
 from typing import Self
 
 import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset, IterableDataset
 
+from src.interfaces.i_shard_repository import IShardRepository
 from src.repositories.cache_repository import CacheRepository
 from src.repositories.dataset_repository import DatasetRepository
+from src.repositories.shard_repository import make_shard_repository
 
 
 # -- PyTorch Dataset wrappers ---------------------------------------------
@@ -78,16 +76,17 @@ class HFAudioDataset(Dataset):
 
 
 class ShardStreamingDataset(IterableDataset):
-    """Streams mel shards directly from HF Hub with one-shard-ahead prefetch.
+    """Iterates samples from pre-cached mel shards.
 
-    While the GPU trains on shard N, a background thread downloads shard N+1.
-    Peak disk usage: two shards (~15GB) at a time.
+    How shards are fetched (mounted volume, Hub download, prefetch) is
+    delegated to an IShardRepository. This class only handles ordering,
+    shuffling, and the max_samples cap.
     """
 
-    def __init__(self, repo_id: str, shard_files: list[str],
+    def __init__(self, shard_repo: IShardRepository, shard_files: list[str],
                  total_samples: int, shuffle: bool = True,
                  max_samples: int | None = None):
-        self._repo_id = repo_id
+        self._shard_repo = shard_repo
         self._shard_files = shard_files
         self._total = min(total_samples, max_samples) if max_samples else total_samples
         self._shuffle = shuffle
@@ -96,65 +95,25 @@ class ShardStreamingDataset(IterableDataset):
     def __len__(self) -> int:
         return self._total
 
-    @staticmethod
-    def _download_shard_file(repo_id: str, shard_name: str,
-                             token: str | None) -> tuple[str, str]:
-        """Download a shard file to disk only (no torch.load). Returns (local_path, tmp_dir)."""
-        from huggingface_hub import hf_hub_download
-        tmp_cache = tempfile.mkdtemp(prefix="hf_shard_")
-        local_path = hf_hub_download(
-            repo_id, shard_name, repo_type="dataset",
-            token=token, cache_dir=tmp_cache,
-        )
-        return local_path, tmp_cache
-
     def __iter__(self):
-        from concurrent.futures import ThreadPoolExecutor, Future
-        token = os.environ.get("HF_TOKEN")
-
         shards = list(self._shard_files)
         if self._shuffle:
             random.shuffle(shards)
 
         yielded = 0
-        executor = ThreadPoolExecutor(max_workers=1)
-        prefetch: Future | None = None
-
+        shard_iter = self._shard_repo.iter_shards(shards)
         try:
-            # Kick off first shard download (file only, not loaded into RAM)
-            if shards:
-                prefetch = executor.submit(
-                    self._download_shard_file, self._repo_id, shards[0], token)
-
-            for i, shard_name in enumerate(shards):
-                if self._max_samples and yielded >= self._max_samples:
-                    break
-
-                # Wait for current shard file to finish downloading
-                local_path, tmp_dir = prefetch.result()
-
-                # Prefetch next shard file while we process current
-                if i + 1 < len(shards):
-                    prefetch = executor.submit(
-                        self._download_shard_file, self._repo_id, shards[i + 1], token)
-
-                # NOW load into RAM (only one shard's data in memory at a time)
-                shard_data = torch.load(local_path, weights_only=True, map_location="cpu")
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-
+            for shard_data in shard_iter:
                 if self._shuffle:
                     random.shuffle(shard_data)
-
                 for mel, tokens in shard_data:
                     if self._max_samples and yielded >= self._max_samples:
-                        break
+                        return
                     yield mel, tokens
                     yielded += 1
-
                 del shard_data
-                gc.collect()
         finally:
-            executor.shutdown(wait=False)
+            shard_iter.close()
 
 
 def collate_fn(
@@ -184,11 +143,10 @@ class DatasetService:
         cache = CacheRepository("checkpoints/mel_cache")
         svc = DatasetService(repo, cache)
 
-        # Stream from HF Hub (recommended — zero disk usage):
-        svc.load_from_hub("tisaconundrum/grassmann-mel-cache")
-        svc.split()
-
-        # Stream with subset:
+        # Pre-cached shards (repo id or mounted path; fetch_mode picks the repository):
+        svc.load_from_hub("tisaconundrum/grassmann-mel-cache")              # prefetch
+        svc.load_from_hub("/data/mel-cache")                                # mounted volume
+        svc.load_from_hub("tisaconundrum/grassmann-mel-cache", fetch_mode="stream")
         svc.load_from_hub("tisaconundrum/grassmann-mel-cache", max_samples=28539)
         svc.split()
 
@@ -214,39 +172,26 @@ class DatasetService:
         self._test_ds: Dataset | None = None
         self._use_streaming = False
 
-    def load_from_hub(self, repo_id: str, max_samples: int | None = None) -> Self:
-        """Stream shards directly from HF Hub — no disk unpack needed.
+    def load_from_hub(self, source: str, max_samples: int | None = None,
+                      fetch_mode: str = "auto") -> Self:
+        """Use pre-cached mel shards from a HF repo id or a local/mounted path.
 
-        Downloads one shard at a time, loads to RAM, yields samples, deletes.
-        Works for both small subsets (--max-samples) and full datasets.
+        fetch_mode selects the IShardRepository: auto | local | stream | prefetch.
+        auto = local if `source` is an existing directory, otherwise prefetch.
         """
-        from huggingface_hub import list_repo_files
+        shard_repo = make_shard_repository(source, fetch_mode)
+        shard_files = shard_repo.list_shards()
+        print(f"  Found {len(shard_files)} shards in {source} "
+              f"({type(shard_repo).__name__})")
 
-        token = os.environ.get("HF_TOKEN")
-        files = list_repo_files(repo_id, repo_type="dataset", token=token)
-        shard_files = sorted(f for f in files if f.startswith("shard_") and f.endswith(".pt"))
-        print(f"  Found {len(shard_files)} shards in {repo_id}")
-
-        # Get total sample count from metadata or estimate
-        total = 0
-        try:
-            import json
-            from huggingface_hub import hf_hub_download
-            meta_path = hf_hub_download(repo_id, "metadata.json",
-                                        repo_type="dataset", token=token)
-            with open(meta_path) as f:
-                meta = json.load(f)
-            total = meta.get("total_samples", len(shard_files) * 20000)
-            print(f"  Total samples from metadata: {total}")
-        except Exception:
-            total = len(shard_files) * 20000
-            print(f"  Estimated total samples: {total}")
+        total = shard_repo.total_samples()
+        print(f"  Total samples: {total}")
 
         if max_samples and max_samples < total:
             print(f"  Limiting to {max_samples} samples")
             total = max_samples
 
-        self._streaming_repo = repo_id
+        self._shard_repo = shard_repo
         self._streaming_shards = shard_files
         self._streaming_total = total
         self._streaming_max_samples = max_samples
@@ -366,15 +311,15 @@ class DatasetService:
             test_max = (max_s - (train_max or 0) - (val_max or 0)) if max_s else None
 
             self._train_ds = ShardStreamingDataset(
-                self._streaming_repo, train_shards,
+                self._shard_repo, train_shards,
                 total_samples=len(train_shards) * sps, shuffle=True,
                 max_samples=train_max)
             self._val_ds = ShardStreamingDataset(
-                self._streaming_repo, val_shards,
+                self._shard_repo, val_shards,
                 total_samples=len(val_shards) * sps, shuffle=False,
                 max_samples=val_max)
             self._test_ds = ShardStreamingDataset(
-                self._streaming_repo, test_shards,
+                self._shard_repo, test_shards,
                 total_samples=len(test_shards) * sps, shuffle=False,
                 max_samples=test_max)
 

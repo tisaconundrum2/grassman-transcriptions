@@ -137,8 +137,8 @@ def cmd_train(args: argparse.Namespace) -> None:
     dataset = DatasetService(repo, cache)
 
     if args.from_cache:
-        dataset.load_from_hub(args.from_cache,
-                              max_samples=args.max_samples).clean().preprocess().split()
+        dataset.load_from_hub(args.from_cache, max_samples=args.max_samples,
+                              fetch_mode=args.fetch_mode).clean().preprocess().split()
     elif args.recipe:
         dataset.load_recipe(args.recipe,
                             max_samples_per_source=args.max_per_source).clean().preprocess().split()
@@ -166,7 +166,10 @@ def cmd_train(args: argparse.Namespace) -> None:
     start_time = time.time()
 
     # Resume from HF checkpoint if available
-    ckpt_svc = CheckpointService(args.from_cache, args.save_dir, args.run_name)
+    ckpt_repo = args.checkpoint_repo
+    if ckpt_repo is None and args.from_cache and not os.path.isdir(args.from_cache):
+        ckpt_repo = args.from_cache
+    ckpt_svc = CheckpointService(ckpt_repo, args.save_dir, args.run_name)
     assert model_ctrl.nn_model is not None
     start_epoch, best_val_loss = ckpt_svc.try_resume(model_ctrl.nn_model)
 
@@ -384,7 +387,14 @@ def main() -> None:
 
     # train
     p = sub.add_parser("train", help="Train model (GPU)")
-    p.add_argument("--from-cache", default=None, help="HF Dataset repo with pre-cached mels")
+    p.add_argument("--from-cache", default=None,
+                   help="Pre-cached mel shards: HF Dataset repo id or local/mounted path")
+    p.add_argument("--fetch-mode", default="auto",
+                   choices=["auto", "local", "stream", "prefetch"],
+                   help="Shard fetcher (auto = local if path exists, else prefetch)")
+    p.add_argument("--checkpoint-repo", default=None,
+                   help="HF Dataset repo for checkpoint upload/resume "
+                        "(defaults to --from-cache when it's a repo id)")
     p.add_argument("--recipe", default=None, help="Multi-dataset recipe (e.g. '1750h')")
     p.add_argument("--dataset", default="openslr/librispeech_asr")
     p.add_argument("--split", default="train.clean.100")
