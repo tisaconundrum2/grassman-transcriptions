@@ -13,6 +13,7 @@ Supports three data modes:
 
 from __future__ import annotations
 
+import os
 import random
 from typing import Self
 
@@ -230,6 +231,14 @@ class DatasetService:
                 repo_id=upload_repo, samples_per_shard=samples_per_shard,
             )
             print(f"    {label}: {count} samples")
+
+            # Free the HF datasets cache between sources to avoid filling
+            # ephemeral disk (load_dataset never cleans up after itself).
+            import shutil
+            hf_cache = os.path.expanduser("~/.cache/huggingface/datasets")
+            if os.path.isdir(hf_cache):
+                shutil.rmtree(hf_cache, ignore_errors=True)
+                print(f"    Cleared HF dataset cache", flush=True)
 
         self._use_cache = True
         return self
