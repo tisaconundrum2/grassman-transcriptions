@@ -82,17 +82,22 @@ def normalize_transcript(text: str) -> str:
 
 
 class DatasetRepository:
-    """Fetches audio+text samples from HuggingFace Hub datasets.
+    """Fetches audio+text samples from HuggingFace datasets.
 
     Resolves column schemas automatically from recipes.yaml or known defaults.
     Streams samples as (mel, tokens) pairs — the caller decides where they go
     (memory, disk cache, etc.).
+
+    When input_dir is set, datasets are loaded from local/mounted paths
+    (e.g. /mnt/librispeech_asr) instead of streaming from the Hub.
     """
 
     def __init__(self, config: GrassmannConfig, tokenizer: CharTokenizer,
-                 recipes_path: str = "recipes.yaml"):
+                 recipes_path: str = "recipes.yaml",
+                 input_dir: str | None = None):
         self.config = config
         self.tokenizer = tokenizer
+        self._input_dir = input_dir
         self._recipes_config = _load_recipes_config(recipes_path)
         self._schemas: dict[str, dict[str, str]] = self._recipes_config.get("schemas", {})
         self._recipes: dict[str, list[dict]] = self._recipes_config.get("recipes", {})
@@ -164,7 +169,7 @@ class DatasetRepository:
         needs_normalize = "librispeech" not in dataset_name.lower()
         n_workers = workers if workers is not None else min(os.cpu_count() or 1, 8)
 
-        ds = load_dataset(dataset_name, config_name, split=split, streaming=True)
+        ds = self._load(dataset_name, config_name, split)
         count = 0
 
         # Config dict for worker processes (can't pickle MelSpectrogram)
@@ -279,8 +284,25 @@ class DatasetRepository:
 
         del ds
 
+    def _load(self, dataset_name: str, config_name: str | None, split: str):
+        """Load a dataset from local mount or Hub."""
+        from datasets import load_dataset
+        if self._input_dir:
+            repo_name = dataset_name.split("/")[-1]
+            local_path = os.path.join(self._input_dir, repo_name)
+            if not os.path.isdir(local_path):
+                raise FileNotFoundError(
+                    f"Mount not found: {local_path} "
+                    f"(expected from dataset '{dataset_name}'). "
+                    f"Add -v hf://datasets/{dataset_name}:{local_path}:ro")
+            print(f"      Loading from: {local_path} (config={config_name}, "
+                  f"split={split})", flush=True)
+            ds = load_dataset(local_path, config_name, split=split)
+            print(f"      Loaded {len(ds)} samples", flush=True)
+            return ds
+        return load_dataset(dataset_name, config_name, split=split, streaming=True)
+
     def fetch_full(self, dataset_name: str, split: str,
                    config_name: str | None = None):
         """Download a full (non-streaming) HF dataset split. Returns the HF dataset object."""
-        from datasets import load_dataset
-        return load_dataset(dataset_name, config_name, split=split)
+        return self._load(dataset_name, config_name, split)

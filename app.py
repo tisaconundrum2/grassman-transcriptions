@@ -266,11 +266,7 @@ def cmd_cache(args: argparse.Namespace) -> None:
 
     config = GrassmannConfig()
     tokenizer = CharTokenizer()
-    if input_dir:
-        from src.repositories.mounted_dataset_repository import MountedDatasetRepository
-        repo = MountedDatasetRepository(config, tokenizer, input_dir)
-    else:
-        repo = DatasetRepository(config, tokenizer)
+    repo = DatasetRepository(config, tokenizer, input_dir=input_dir)
     staging_dir = tempfile.mkdtemp(prefix="mel_staging_")
     cache = CacheRepository(staging_dir)
     dataset = DatasetService(repo, cache)
