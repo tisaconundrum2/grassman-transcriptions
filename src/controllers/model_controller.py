@@ -97,12 +97,23 @@ class ModelController(IModel):
         """Decode and print sample transcriptions from a validation dataset."""
         assert self.trainer is not None
         print("\n  Sample transcriptions:", flush=True)
-        for i in range(min(n, len(val_ds))):
-            mel, tokens = val_ds[i]
-            pred_text = self.predict(mel)
-            gt_text = self.tokenizer.decode(tokens)
-            print(f"    [{i}] GT:   '{gt_text}'", flush=True)
-            print(f"    [{i}] PRED: '{pred_text}'")
+        # Support both map-style (indexable) and iterable datasets
+        from torch.utils.data import IterableDataset
+        if isinstance(val_ds, IterableDataset):
+            for i, (mel, tokens) in enumerate(val_ds):
+                if i >= n:
+                    break
+                pred_text = self.predict(mel)
+                gt_text = self.tokenizer.decode(tokens)
+                print(f"    [{i}] GT:   '{gt_text}'", flush=True)
+                print(f"    [{i}] PRED: '{pred_text}'")
+        else:
+            for i in range(min(n, len(val_ds))):
+                mel, tokens = val_ds[i]
+                pred_text = self.predict(mel)
+                gt_text = self.tokenizer.decode(tokens)
+                print(f"    [{i}] GT:   '{gt_text}'", flush=True)
+                print(f"    [{i}] PRED: '{pred_text}'")
         print()
 
     def post_training(self, save_dir: str, run_name: str | None = None) -> None:
