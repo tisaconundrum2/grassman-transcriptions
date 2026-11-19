@@ -251,17 +251,18 @@ def cmd_cache(args: argparse.Namespace) -> None:
 
     _start_health_server()
 
-    import tempfile
+    import shutil, tempfile
 
-    input_dir = getattr(args, 'input', None)
-    mode = "local" if input_dir else "streaming"
+    output_repo = args.mount or args.stream
+    input_dir = "/mnt" if args.mount else None
+    mode = "mounted" if args.mount else "streaming"
     print("\n" + "=" * 60)
     print(f"  Grassmann — Dataset Caching ({mode})")
     print("=" * 60)
     print(f"  Recipe: {args.recipe}")
-    print(f"  Output:  {args.repo}")
+    print(f"  Output: {output_repo}")
     if input_dir:
-        print(f"  Input:   {input_dir}")
+        print(f"  Input:  {input_dir}")
     print("=" * 60 + "\n")
 
     config = GrassmannConfig()
@@ -274,15 +275,14 @@ def cmd_cache(args: argparse.Namespace) -> None:
     start = time.time()
     dataset.load_recipe(args.recipe,
                         max_samples_per_source=args.max_per_source,
-                        upload_repo=args.repo,
+                        upload_repo=output_repo,
                         samples_per_shard=args.samples_per_shard,
                         workers=args.workers)
-    import shutil
     shutil.rmtree(staging_dir, ignore_errors=True)
     print(f"\n  Caching complete in {(time.time() - start)/60:.1f} minutes")
 
     _auto_pause_space()
-    print(f"\n  Done! Now train with: python app.py train --from-cache {args.repo}")
+    print(f"\n  Done! Now train with: python app.py train --from-cache {output_repo}")
 
 
 # ── export ───────────────────────────────────────────────────────────────
@@ -422,8 +422,9 @@ def main() -> None:
     # cache
     p = sub.add_parser("cache", help="Cache dataset mels to HF Hub")
     p.add_argument("--recipe", required=True)
-    p.add_argument("--repo", required=True, help="HF Dataset repo for mel shard upload")
-    p.add_argument("--input", default=None, help="Local/mount dir with raw datasets (omit to stream from Hub)")
+    source = p.add_mutually_exclusive_group(required=True)
+    source.add_argument("--mount", metavar="REPO", help="Read from mounted datasets at /mnt, upload shards to REPO")
+    source.add_argument("--stream", metavar="REPO", help="Stream from HF Hub, upload shards to REPO")
     p.add_argument("--max-per-source", type=int, default=None)
     p.add_argument("--samples-per-shard", type=int, default=5000, help="Samples per shard file (default 5000)")
     p.add_argument("--workers", type=int, default=0, help="Parallel mel workers (0=sequential, default)")
