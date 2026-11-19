@@ -171,7 +171,8 @@ def cmd_train(args: argparse.Namespace) -> None:
         ckpt_repo = args.from_cache
     ckpt_svc = CheckpointService(ckpt_repo, args.save_dir, args.run_name)
     assert model_ctrl.nn_model is not None
-    start_epoch, best_val_loss = ckpt_svc.try_resume(model_ctrl.nn_model)
+    start_epoch, best_val_loss = ckpt_svc.try_resume(model_ctrl.nn_model,
+                                                     trainer=model_ctrl.trainer)
 
     _log_memory("Before training")
 
@@ -208,7 +209,7 @@ def cmd_train(args: argparse.Namespace) -> None:
                        os.path.join(args.save_dir, "best_model.pt"))
             print(f"    -> Saved best model (val_loss={val_loss:.4f})", flush=True)
             # Upload checkpoint to HF repo for crash resilience
-            ckpt_svc.upload(epoch, val_loss)
+            ckpt_svc.upload(epoch, val_loss, trainer=model_ctrl.trainer)
 
         if epoch % 10 == 0:
             assert model_ctrl.nn_model is not None

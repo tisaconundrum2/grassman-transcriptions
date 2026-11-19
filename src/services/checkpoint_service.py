@@ -29,13 +29,21 @@ class CheckpointService:
         self._checkpoint_name = (
             f"{run_name}-best_model.pt" if run_name else "best_model.pt"
         )
+        # Optimizer/scheduler/scaler state, kept separate so best_model.pt
+        # stays a plain state_dict for export and eval.
+        self._train_state_name = (
+            f"{run_name}-train_state.pt" if run_name else "train_state.pt"
+        )
 
     @property
     def checkpoint_name(self) -> str:
         return self._checkpoint_name
 
-    def try_resume(self, model: torch.nn.Module) -> tuple[int, float]:
+    def try_resume(self, model: torch.nn.Module, trainer=None) -> tuple[int, float]:
         """Download and load a checkpoint from the HF Dataset repo.
+
+        If `trainer` is given, also restores optimizer/scheduler/scaler state,
+        or fast-forwards the LR schedule when no saved state exists.
 
         Returns (start_epoch, best_val_loss). If no checkpoint found, returns (1, inf).
         """
@@ -48,6 +56,7 @@ class CheckpointService:
             files = list_repo_files(self._repo_id, repo_type="dataset", token=token)
             ckpt_path = f"checkpoints/{self._checkpoint_name}"
             meta_path = f"checkpoints/{self._checkpoint_name}.meta.json"
+            state_path = f"checkpoints/{self._train_state_name}"
 
             if ckpt_path not in files:
                 print(f"  No checkpoint found in {self._repo_id} ({ckpt_path})", flush=True)
@@ -77,14 +86,30 @@ class CheckpointService:
                   f"val_loss={best_val_loss:.4f}", flush=True)
             if torch.cuda.is_available():
                 model.cuda()
+
+            if trainer is not None:
+                if state_path in files:
+                    local_state = hf_hub_download(
+                        self._repo_id, state_path, repo_type="dataset", token=token)
+                    trainer.load_state_dict(
+                        torch.load(local_state, weights_only=True, map_location="cpu"))
+                    print("  Restored optimizer/scheduler/scaler state", flush=True)
+                else:
+                    trainer.fast_forward_schedule(start_epoch - 1)
+                    print(f"  No saved optimizer state; LR schedule fast-forwarded "
+                          f"{start_epoch - 1} epochs", flush=True)
+                if trainer.scheduler is not None:
+                    lr = trainer.optimizer.param_groups[0]["lr"]
+                    print(f"  LR at resume: {lr:.2e}", flush=True)
+
             return start_epoch, best_val_loss
 
         except Exception as e:
             print(f"  Could not resume checkpoint: {e}", flush=True)
             return 1, float("inf")
 
-    def upload(self, epoch: int, val_loss: float) -> None:
-        """Upload best_model.pt + metadata to HF Dataset repo."""
+    def upload(self, epoch: int, val_loss: float, trainer=None) -> None:
+        """Upload best_model.pt + metadata (+ trainer state) to HF Dataset repo."""
         if not self._repo_id:
             return
 
@@ -105,6 +130,19 @@ class CheckpointService:
                 commit_message=f"Checkpoint epoch {epoch}: val_loss={val_loss:.4f}",
             )
 
+            if trainer is not None:
+                local_state = os.path.join(self._save_dir, self._train_state_name)
+                torch.save(trainer.state_dict(), local_state)
+                api.upload_file(
+                    path_or_fileobj=local_state,
+                    path_in_repo=f"checkpoints/{self._train_state_name}",
+                    repo_id=self._repo_id,
+                    repo_type="dataset",
+                    commit_message=f"Train state epoch {epoch}",
+                )
+
+            # Meta goes last: resume trusts it, so it should only point at an
+            # epoch whose weights (and state) are already uploaded.
             meta = {"epoch": epoch, "val_loss": val_loss,
                     "checkpoint_name": self._checkpoint_name}
             meta_path = os.path.join(self._save_dir, f"{self._checkpoint_name}.meta.json")

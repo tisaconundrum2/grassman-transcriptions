@@ -57,6 +57,35 @@ class TrainingService:
         cosine = CosineAnnealingLR(self.optimizer, T_max=epochs - warmup_epochs, eta_min=1e-6)
         self.scheduler = SequentialLR(self.optimizer, [warmup, cosine], milestones=[warmup_epochs])
 
+    def state_dict(self) -> dict:
+        """Optimizer, LR scheduler, and AMP scaler state for exact resume."""
+        return {
+            "optimizer": self.optimizer.state_dict(),
+            "scheduler": self.scheduler.state_dict() if self.scheduler else None,
+            "scaler": self.scaler.state_dict(),
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        self.optimizer.load_state_dict(state["optimizer"])
+        if self.scheduler is not None and state.get("scheduler") is not None:
+            self.scheduler.load_state_dict(state["scheduler"])
+        if self.use_amp and state.get("scaler"):
+            self.scaler.load_state_dict(state["scaler"])
+
+    def fast_forward_schedule(self, epochs_done: int) -> None:
+        """Advance the LR schedule as if `epochs_done` epochs had run.
+
+        Used when resuming from a checkpoint that has no saved scheduler state.
+        """
+        if self.scheduler is None:
+            return
+        import warnings
+        with warnings.catch_warnings():
+            # Stepping before optimizer.step() warns; harmless here.
+            warnings.simplefilter("ignore", UserWarning)
+            for _ in range(epochs_done):
+                self.scheduler.step()
+
     def train_epoch(self, train_loader: DataLoader) -> float:
         self.model.train()
         total_loss = 0.0
