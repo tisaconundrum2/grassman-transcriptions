@@ -62,7 +62,7 @@ Runs entirely in the browser via ONNX + WASM. 11M params, 120x real-time on 16mi
 
 Training runs on [HF Jobs](https://huggingface.co/docs/hub/en/jobs) — per-second GPU billing, persistent secrets, auto-retry on failure. **Do not use HF Spaces for training** (ephemeral disk, health check kills, secrets require restarts).
 
-Features: AMP (mixed precision) auto-enabled on GPU, shard streaming with one-ahead prefetch (zero disk unpack), checkpoint resume from HF Hub.
+Features: AMP (mixed precision) auto-enabled on GPU, shard streaming (local mount, Hub prefetch, or sequential), checkpoint resume with LR schedule restore.
 
 ### Setup
 
@@ -73,11 +73,11 @@ hf auth login
 
 All jobs use a single Docker image: `ghcr.io/tisaconundrum2/grassmann:latest`
 
-### Step 1: Cache mel spectrograms (one-time, CPU)
+### Step 1: Cache mel spectrograms (one-time, GPU recommended)
 
 ```bash
 hf jobs run \
-  --flavor cpu-basic \
+  --flavor t4-small \
   --timeout 6h \
   --name cache-1750h \
   -s HF_TOKEN \
@@ -85,8 +85,11 @@ hf jobs run \
   -- python -u app.py cache \
     --recipe 1750h \
     --cache-dir mel_cache \
-    --repo tisaconundrum/grassmann-mel-cache
+    --repo tisaconundrum/grassmann-mel-cache \
+    --samples-per-shard 5000
 ```
+
+> Smaller shards (~1.8GB each at 5K samples) load faster, fit better in the mount cache, and give finer shuffle granularity.
 
 ### Step 2: Train (GPU)
 
@@ -126,24 +129,26 @@ hf jobs run \
     --run-name smol-ablation --save-dir checkpoints --decode-every 5
 ```
 
-**Ablation 1750h (full cache, symmetric mixer, AMP + streaming):**
+**Ablation 1750h (full cache, mounted volume, AMP):**
 ```bash
 hf jobs run \
   --flavor t4-small \
-  --timeout 24h \
+  --timeout 48h \
   --attempts 3 \
   --name ablation-1750h \
   -s HF_TOKEN \
+  -v hf://datasets/tisaconundrum/grassmann-mel-cache:/mnt/mel-cache:ro \
   --detach \
   ghcr.io/tisaconundrum2/grassmann:latest \
   -- python -u app.py train \
-    --from-cache tisaconundrum/grassmann-mel-cache \
+    --from-cache /mnt/mel-cache \
+    --checkpoint-repo tisaconundrum/grassmann-mel-cache \
     --epochs 20 --batch-size 128 --layers 6 --d-model 256 --r-reduced 32 --lr 3e-4 \
     --ctc --conformer --two-sided --ablation \
     --run-name ablation-1750h --save-dir checkpoints --decode-every 5
 ```
 
-> **Note:** `--from-cache` streams shards directly from HF Hub with one-shard-ahead prefetch — no disk unpack needed. Batch 128 is the max for T4 (15GB VRAM). AMP is auto-enabled on GPU.
+> **Data loading modes:** `--from-cache` accepts a HF repo id or a local/mounted path. Use `--fetch-mode` to pick the strategy: `auto` (mount if path exists, else prefetch), `local`, `stream`, or `prefetch`. When using a mounted path, pass `--checkpoint-repo` for checkpoint upload/resume. Batch 128 is the max for T4 (15GB VRAM). AMP is auto-enabled on GPU.
 
 ### Step 3: Monitor
 
@@ -157,18 +162,22 @@ hf jobs list                               # List all jobs
 
 | Flag | Purpose |
 |------|---------|
-| `--from-cache <repo>` | Stream pre-cached mel shards from HF Dataset repo (zero disk) |
+| `--from-cache <source>` | Pre-cached shards: HF repo id or local/mounted path |
+| `--fetch-mode <mode>` | Shard fetcher: `auto`, `local`, `stream`, `prefetch` |
+| `--checkpoint-repo <repo>` | HF repo for checkpoint upload/resume (auto when `--from-cache` is a repo id) |
 | `--max-samples <n>` | Subset of cached data (28539 = train.clean.100) |
 | `--ablation` | Swap Plücker for symmetric products |
 | `--run-name <name>` | Prefix for saved artifacts (avoids collisions) |
 | `--recipe <name>` | Dataset recipe from `recipes.yaml` |
+| `--samples-per-shard <n>` | Samples per shard file (default 5000, cache subcommand) |
 | `--workers <n>` | DataLoader num_workers (ignored for streaming) |
 | `-s HF_TOKEN` | Pass HF token as secret (for checkpoint uploads) |
+| `-v hf://datasets/<repo>:/path:ro` | Mount dataset as a local read-only volume |
 | `--attempts 3` | Auto-retry on failure (checkpoints resume from Hub) |
 
 ### Checkpoint persistence
 
-Best model weights upload to `tisaconundrum/grassmann-mel-cache` under `checkpoints/{run_name}-best_model.pt` every time val_loss improves. On restart (or `--attempts` retry), training resumes from the last uploaded checkpoint automatically.
+Best model weights + optimizer/scheduler state upload to `tisaconundrum/grassmann-mel-cache` under `checkpoints/{run_name}-best_model.pt` every time val_loss improves. On restart (or `--attempts` retry), training resumes from the last uploaded checkpoint with the correct LR schedule position.
 
 ### Docker image
 
@@ -186,19 +195,20 @@ The command passed to `hf jobs run` determines what it does (train, cache, eval,
 |--------|----------|------|------|
 | Smol (11M, 100h, 50 epochs, fp32) | T4 small | ~9h | ~$3.60 |
 | Smol (11M, 100h, 50 epochs, AMP) | T4 small | ~4.2h | ~$1.70 |
-| Ablation 1750h (11M, 20 epochs, AMP + streaming) | T4 small | ~14h | ~$8.40 |
-| Cache (1750h recipe) | CPU basic | ~4h | ~$0.04 |
+| Ablation 1750h (11M, 20 epochs, AMP + mount) | T4 small | ~28h | ~$17 |
+| Cache (1750h recipe, GPU) | T4 small | ~2h | ~$1.20 |
 
-> AMP (mixed precision) gives ~1.8x speedup on T4. Shard streaming with prefetch hides most download overhead.
+> AMP (mixed precision) gives ~1.8x speedup on T4. Mounted volumes avoid download overhead; smaller shards (5K samples) reduce load stalls.
 
 ## Project Structure
 
 ```
 src/
-  interfaces/           # Abstract contracts (IModel, IDataset, etc.)
+  interfaces/           # Abstract contracts (IModel, IDataset, IShardRepository)
   models/               # Grassmann architecture (CausalGrassmannLayer, PluckerEncoder)
-  services/             # Audio, datasets, training, ONNX export, WER eval, upload
-  controllers/          # Fluent API orchestration
+  repositories/         # Data access (shard fetching, HF Hub cache, dataset streaming)
+  services/             # Audio, datasets, training, checkpoints, ONNX export, WER eval
+  controllers/          # Fluent API orchestration (ModelController, PipelineController)
   views/                # Console output
 app.py                  # Unified CLI (train, cache, export, eval, transcribe, demo)
 inference_onnx.py       # Standalone ONNX inference (no PyTorch dependency)
