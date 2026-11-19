@@ -57,27 +57,6 @@ class TrainingService:
         cosine = CosineAnnealingLR(self.optimizer, T_max=epochs - warmup_epochs, eta_min=1e-6)
         self.scheduler = SequentialLR(self.optimizer, [warmup, cosine], milestones=[warmup_epochs])
 
-    @staticmethod
-    def _spec_augment(mels: torch.Tensor, n_freq_masks: int = 2,
-                      freq_mask_width: int = 15, n_time_masks: int = 2,
-                      time_mask_width: int = 70) -> torch.Tensor:
-        """Apply SpecAugment: random frequency and time masking on mel spectrograms.
-
-        Standard ASR augmentation from Park et al. (2019). Masks are applied
-        in-place for efficiency. Only use during training.
-        """
-        # mels: (B, n_mels, T)
-        _, n_mels, T = mels.shape
-        for _ in range(n_freq_masks):
-            f = torch.randint(0, min(freq_mask_width, n_mels), (1,)).item()
-            f0 = torch.randint(0, max(1, n_mels - f), (1,)).item()
-            mels[:, f0:f0 + f, :] = 0.0
-        for _ in range(n_time_masks):
-            t = torch.randint(0, min(time_mask_width, T), (1,)).item()
-            t0 = torch.randint(0, max(1, T - t), (1,)).item()
-            mels[:, :, t0:t0 + t] = 0.0
-        return mels
-
     def train_epoch(self, train_loader: DataLoader) -> float:
         self.model.train()
         total_loss = 0.0
@@ -89,8 +68,6 @@ class TrainingService:
             tokens = tokens.to(self.device)
             mel_lengths = mel_lengths.to(self.device)
             token_lengths = token_lengths.to(self.device)
-
-            mels = self._spec_augment(mels)
 
             self.optimizer.zero_grad()
 
