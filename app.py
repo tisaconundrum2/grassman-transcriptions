@@ -251,16 +251,24 @@ def cmd_cache(args: argparse.Namespace) -> None:
 
     _start_health_server()
 
+    mount_dir = getattr(args, 'mount_dir', None)
+    mode = "mounted" if mount_dir else "streaming"
     print("\n" + "=" * 60)
-    print("  Grassmann — Dataset Caching (CPU)")
+    print(f"  Grassmann — Dataset Caching ({mode})")
     print("=" * 60)
     print(f"  Recipe: {args.recipe}")
     print(f"  Upload to: {args.repo}")
+    if mount_dir:
+        print(f"  Mount dir: {mount_dir}")
     print("=" * 60 + "\n")
 
     config = GrassmannConfig()
     tokenizer = CharTokenizer()
-    repo = DatasetRepository(config, tokenizer)
+    if mount_dir:
+        from src.repositories.mounted_dataset_repository import MountedDatasetRepository
+        repo = MountedDatasetRepository(config, tokenizer, mount_dir)
+    else:
+        repo = DatasetRepository(config, tokenizer)
     cache = CacheRepository(args.cache_dir)
     dataset = DatasetService(repo, cache)
 
@@ -417,6 +425,7 @@ def main() -> None:
     p.add_argument("--cache-dir", default="mel_cache")
     p.add_argument("--max-per-source", type=int, default=None)
     p.add_argument("--samples-per-shard", type=int, default=5000, help="Samples per shard file (default 5000)")
+    p.add_argument("--mount-dir", default=None, help="Base dir for mounted datasets (e.g. /mnt)")
     p.add_argument("--workers", type=int, default=0, help="Parallel mel workers (0=sequential, default)")
 
     # export
