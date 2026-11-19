@@ -251,25 +251,28 @@ def cmd_cache(args: argparse.Namespace) -> None:
 
     _start_health_server()
 
-    mount_dir = getattr(args, 'mount_dir', None)
-    mode = "mounted" if mount_dir else "streaming"
+    import tempfile
+
+    input_dir = getattr(args, 'input', None)
+    mode = "local" if input_dir else "streaming"
     print("\n" + "=" * 60)
     print(f"  Grassmann — Dataset Caching ({mode})")
     print("=" * 60)
     print(f"  Recipe: {args.recipe}")
-    print(f"  Upload to: {args.repo}")
-    if mount_dir:
-        print(f"  Mount dir: {mount_dir}")
+    print(f"  Output:  {args.repo}")
+    if input_dir:
+        print(f"  Input:   {input_dir}")
     print("=" * 60 + "\n")
 
     config = GrassmannConfig()
     tokenizer = CharTokenizer()
-    if mount_dir:
+    if input_dir:
         from src.repositories.mounted_dataset_repository import MountedDatasetRepository
-        repo = MountedDatasetRepository(config, tokenizer, mount_dir)
+        repo = MountedDatasetRepository(config, tokenizer, input_dir)
     else:
         repo = DatasetRepository(config, tokenizer)
-    cache = CacheRepository(args.cache_dir)
+    staging_dir = tempfile.mkdtemp(prefix="mel_staging_")
+    cache = CacheRepository(staging_dir)
     dataset = DatasetService(repo, cache)
 
     start = time.time()
@@ -278,6 +281,8 @@ def cmd_cache(args: argparse.Namespace) -> None:
                         upload_repo=args.repo,
                         samples_per_shard=args.samples_per_shard,
                         workers=args.workers)
+    import shutil
+    shutil.rmtree(staging_dir, ignore_errors=True)
     print(f"\n  Caching complete in {(time.time() - start)/60:.1f} minutes")
 
     _auto_pause_space()
@@ -419,13 +424,12 @@ def main() -> None:
     _add_model_args(p)
 
     # cache
-    p = sub.add_parser("cache", help="Cache dataset mels to HF Hub (CPU)")
+    p = sub.add_parser("cache", help="Cache dataset mels to HF Hub")
     p.add_argument("--recipe", required=True)
-    p.add_argument("--repo", required=True, help="HF Dataset repo")
-    p.add_argument("--cache-dir", default="mel_cache")
+    p.add_argument("--repo", required=True, help="HF Dataset repo for mel shard upload")
+    p.add_argument("--input", default=None, help="Local/mount dir with raw datasets (omit to stream from Hub)")
     p.add_argument("--max-per-source", type=int, default=None)
     p.add_argument("--samples-per-shard", type=int, default=5000, help="Samples per shard file (default 5000)")
-    p.add_argument("--mount-dir", default=None, help="Base dir for mounted datasets (e.g. /mnt)")
     p.add_argument("--workers", type=int, default=0, help="Parallel mel workers (0=sequential, default)")
 
     # export
