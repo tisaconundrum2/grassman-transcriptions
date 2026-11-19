@@ -88,105 +88,6 @@ def _auto_pause_space() -> None:
         print(f"  Note: could not auto-pause: {e}", flush=True)
 
 
-# ── checkpoint persistence ────────────────────────────────────────────────
-
-def _try_resume_checkpoint(model_ctrl, repo_id: str | None,
-                           checkpoint_name: str, save_dir: str) -> tuple[int, float]:
-    """Try to download and load a checkpoint from the HF Dataset repo.
-
-    Returns (start_epoch, best_val_loss). If no checkpoint found, returns (1, inf).
-    """
-    if not repo_id:
-        return 1, float("inf")
-
-    try:
-        from huggingface_hub import hf_hub_download, list_repo_files
-        hf_token = os.environ.get("HF_TOKEN")
-        files = list_repo_files(repo_id, repo_type="dataset", token=hf_token)
-        ckpt_path = f"checkpoints/{checkpoint_name}"
-        meta_path = f"checkpoints/{checkpoint_name}.meta.json"
-
-        if ckpt_path not in files:
-            print(f"  No checkpoint found in {repo_id} ({ckpt_path})", flush=True)
-            return 1, float("inf")
-
-        # Download checkpoint
-        local_ckpt = hf_hub_download(repo_id, ckpt_path, repo_type="dataset", token=hf_token)
-        state_dict = torch.load(local_ckpt, weights_only=True, map_location="cpu")
-        assert model_ctrl.nn_model is not None
-        model_ctrl.nn_model.load_state_dict(state_dict)
-        del state_dict
-
-        # Also save locally so training can continue saving to same path
-        import shutil
-        os.makedirs(save_dir, exist_ok=True)
-        shutil.copy2(local_ckpt, os.path.join(save_dir, "best_model.pt"))
-
-        # Load metadata (epoch, val_loss)
-        start_epoch = 1
-        best_val_loss = float("inf")
-        if meta_path in files:
-            import json
-            local_meta = hf_hub_download(repo_id, meta_path, repo_type="dataset", token=hf_token)
-            with open(local_meta) as f:
-                meta = json.load(f)
-            start_epoch = meta.get("epoch", 0) + 1
-            best_val_loss = meta.get("val_loss", float("inf"))
-
-        print(f"  Resumed from checkpoint: epoch {start_epoch - 1}, "
-              f"val_loss={best_val_loss:.4f}", flush=True)
-        if torch.cuda.is_available():
-            model_ctrl.nn_model.cuda()
-        return start_epoch, best_val_loss
-
-    except Exception as e:
-        print(f"  Could not resume checkpoint: {e}", flush=True)
-        return 1, float("inf")
-
-
-def _upload_checkpoint(repo_id: str | None, save_dir: str,
-                       checkpoint_name: str, epoch: int, val_loss: float) -> None:
-    """Upload best_model.pt + metadata to HF Dataset repo for crash resilience."""
-    if not repo_id:
-        return
-
-    try:
-        import json
-        from huggingface_hub import HfApi
-        hf_token = os.environ.get("HF_TOKEN")
-        api = HfApi(token=hf_token)
-
-        local_pt = os.path.join(save_dir, "best_model.pt")
-        if not os.path.isfile(local_pt):
-            return
-
-        # Upload model weights
-        api.upload_file(
-            path_or_fileobj=local_pt,
-            path_in_repo=f"checkpoints/{checkpoint_name}",
-            repo_id=repo_id,
-            repo_type="dataset",
-            commit_message=f"Checkpoint epoch {epoch}: val_loss={val_loss:.4f}",
-        )
-
-        # Upload metadata
-        meta = {"epoch": epoch, "val_loss": val_loss, "checkpoint_name": checkpoint_name}
-        meta_path = os.path.join(save_dir, f"{checkpoint_name}.meta.json")
-        with open(meta_path, "w") as f:
-            json.dump(meta, f)
-        api.upload_file(
-            path_or_fileobj=meta_path,
-            path_in_repo=f"checkpoints/{checkpoint_name}.meta.json",
-            repo_id=repo_id,
-            repo_type="dataset",
-            commit_message=f"Meta epoch {epoch}: val_loss={val_loss:.4f}",
-        )
-
-        print(f"    -> Checkpoint uploaded to {repo_id} (epoch {epoch})", flush=True)
-    except Exception as e:
-        print(f"    -> Checkpoint upload failed: {e}", flush=True)
-
-
 # ── train ────────────────────────────────────────────────────────────────
 
 def cmd_train(args: argparse.Namespace) -> None:
@@ -197,6 +98,7 @@ def cmd_train(args: argparse.Namespace) -> None:
     from src.repositories.dataset_repository import DatasetRepository
     from src.repositories.cache_repository import CacheRepository
     from src.services.dataset_service import DatasetService
+    from src.services.checkpoint_service import CheckpointService
 
     _start_health_server()
 
@@ -264,9 +166,9 @@ def cmd_train(args: argparse.Namespace) -> None:
     start_time = time.time()
 
     # Resume from HF checkpoint if available
-    checkpoint_name = f"{args.run_name}-best_model.pt" if args.run_name else "best_model.pt"
-    start_epoch, best_val_loss = _try_resume_checkpoint(
-        model_ctrl, args.from_cache, checkpoint_name, args.save_dir)
+    ckpt_svc = CheckpointService(args.from_cache, args.save_dir, args.run_name)
+    assert model_ctrl.nn_model is not None
+    start_epoch, best_val_loss = ckpt_svc.try_resume(model_ctrl.nn_model)
 
     _log_memory("Before training")
 
@@ -303,7 +205,7 @@ def cmd_train(args: argparse.Namespace) -> None:
                        os.path.join(args.save_dir, "best_model.pt"))
             print(f"    -> Saved best model (val_loss={val_loss:.4f})", flush=True)
             # Upload checkpoint to HF repo for crash resilience
-            _upload_checkpoint(args.from_cache, args.save_dir, checkpoint_name, epoch, val_loss)
+            ckpt_svc.upload(epoch, val_loss)
 
         if epoch % 10 == 0:
             assert model_ctrl.nn_model is not None
@@ -311,7 +213,7 @@ def cmd_train(args: argparse.Namespace) -> None:
                        os.path.join(args.save_dir, f"epoch_{epoch}.pt"))
 
         if epoch % args.decode_every == 0 or epoch == 1:
-            _decode_samples(model_ctrl, dataset)
+            model_ctrl.decode_samples(dataset._val_ds)
 
     assert model_ctrl.nn_model is not None
     torch.save(model_ctrl.nn_model.state_dict(), os.path.join(args.save_dir, "final_model.pt"))
@@ -327,94 +229,9 @@ def cmd_train(args: argparse.Namespace) -> None:
     print(f"  Total time:    {total_time/60:.1f} minutes")
     print(f"{'=' * 60}")
 
-    _decode_samples(model_ctrl, dataset, n=5)
-    _post_training(model_ctrl, config, args.save_dir, run_name=args.run_name)
+    model_ctrl.decode_samples(dataset._val_ds, n=5)
+    model_ctrl.post_training(args.save_dir, run_name=args.run_name)
 
-
-def _decode_samples(model_ctrl, dataset, n: int = 3) -> None:
-    assert model_ctrl.trainer is not None and dataset._val_ds is not None
-    print("\n  Sample transcriptions:", flush=True)
-    for i in range(min(n, len(dataset._val_ds))):
-        mel, tokens = dataset._val_ds[i]
-        pred_text = model_ctrl.predict(mel)
-        gt_text = model_ctrl.tokenizer.decode(tokens)
-        print(f"    [{i}] GT:   '{gt_text}'", flush=True)
-        print(f"    [{i}] PRED: '{pred_text}'")
-    print()
-
-
-def _post_training(model_ctrl, config, save_dir: str, run_name: str | None = None) -> None:
-    from src.services.export_service import export_seq2seq, export_ctc
-
-    def _prefixed(name: str) -> str:
-        """Prefix a filename with run_name so uploads are distinguishable."""
-        if not run_name:
-            return name
-        base, ext = os.path.splitext(name)
-        return f"{run_name}-{base}{ext}"
-
-    try:
-        from src.services.model_hub_service import save_model
-        assert model_ctrl.nn_model is not None
-        save_model(model_ctrl.nn_model, config, os.path.join(save_dir, "bundle"))
-        print("  Model bundle saved.", flush=True)
-    except Exception as e:
-        print(f"  Warning: bundle save failed: {e}", flush=True)
-
-    try:
-        onnx_dir = os.path.join(save_dir, "onnx")
-        if config.use_seq2seq:
-            export_seq2seq(model_ctrl.nn_model, config, onnx_dir)
-        else:
-            export_ctc(model_ctrl.nn_model, config, onnx_dir)
-        print(f"  ONNX exported to {onnx_dir}/", flush=True)
-    except Exception as e:
-        print(f"  Warning: ONNX export failed: {e}", flush=True)
-
-    # Rename artifacts with run_name prefix before upload
-    if run_name:
-        import shutil
-        # Rename best_model.pt → ablation-smol-best_model.pt etc.
-        for name in ["best_model.pt", "final_model.pt"]:
-            src = os.path.join(save_dir, name)
-            dst = os.path.join(save_dir, _prefixed(name))
-            if os.path.isfile(src):
-                shutil.move(src, dst)
-        # Rename ONNX files (model.onnx → ablation-smol-model.onnx etc.)
-        onnx_dir = os.path.join(save_dir, "onnx")
-        if os.path.isdir(onnx_dir):
-            for fname in list(os.listdir(onnx_dir)):
-                src = os.path.join(onnx_dir, fname)
-                dst = os.path.join(onnx_dir, _prefixed(fname))
-                if os.path.isfile(src):
-                    shutil.move(src, dst)
-        # Rename bundle config files
-        bundle_dir = os.path.join(save_dir, "bundle")
-        if os.path.isdir(bundle_dir):
-            for fname in list(os.listdir(bundle_dir)):
-                src = os.path.join(bundle_dir, fname)
-                dst = os.path.join(bundle_dir, _prefixed(fname))
-                if os.path.isfile(src):
-                    shutil.move(src, dst)
-
-    try:
-        from src.services.upload_service import upload_file, upload_directory
-        bundle_dir = os.path.join(save_dir, "bundle")
-        onnx_dir = os.path.join(save_dir, "onnx")
-        if os.path.isdir(bundle_dir):
-            for fname in sorted(os.listdir(bundle_dir)):
-                fpath = os.path.join(bundle_dir, fname)
-                if os.path.isfile(fpath):
-                    upload_file(fpath)
-        if os.path.isdir(onnx_dir):
-            urls = upload_directory(onnx_dir)
-            print(f"  Uploaded {len(urls)} ONNX files", flush=True)
-        best_name = _prefixed("best_model.pt")
-        best_path = os.path.join(save_dir, best_name)
-        if os.path.isfile(best_path):
-            upload_file(best_path)
-    except Exception as e:
-        print(f"  Warning: upload failed: {e}", flush=True)
 
     _auto_pause_space()
 

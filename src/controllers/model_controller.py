@@ -7,6 +7,7 @@ Provides the chainable interface:
 
 from __future__ import annotations
 
+import os
 from typing import Any, Self
 
 import torch
@@ -91,3 +92,88 @@ class ModelController(IModel):
         self.nn_model.load_state_dict(torch.load(path, weights_only=True))
         self.view.show_message(f"Model loaded from {path}")
         return self
+
+    def decode_samples(self, val_ds: Any, n: int = 3) -> None:
+        """Decode and print sample transcriptions from a validation dataset."""
+        assert self.trainer is not None
+        print("\n  Sample transcriptions:", flush=True)
+        for i in range(min(n, len(val_ds))):
+            mel, tokens = val_ds[i]
+            pred_text = self.predict(mel)
+            gt_text = self.tokenizer.decode(tokens)
+            print(f"    [{i}] GT:   '{gt_text}'", flush=True)
+            print(f"    [{i}] PRED: '{pred_text}'")
+        print()
+
+    def post_training(self, save_dir: str, run_name: str | None = None) -> None:
+        """Bundle model, export ONNX, rename with run_name, and upload."""
+        import shutil
+        from src.services.export_service import export_seq2seq, export_ctc
+
+        def _prefixed(name: str) -> str:
+            if not run_name:
+                return name
+            base, ext = os.path.splitext(name)
+            return f"{run_name}-{base}{ext}"
+
+        # Save bundle
+        try:
+            from src.services.model_hub_service import save_model
+            assert self.nn_model is not None
+            save_model(self.nn_model, self.config, os.path.join(save_dir, "bundle"))
+            print("  Model bundle saved.", flush=True)
+        except Exception as e:
+            print(f"  Warning: bundle save failed: {e}", flush=True)
+
+        # Export ONNX
+        try:
+            onnx_dir = os.path.join(save_dir, "onnx")
+            if self.config.use_seq2seq:
+                export_seq2seq(self.nn_model, self.config, onnx_dir)
+            else:
+                export_ctc(self.nn_model, self.config, onnx_dir)
+            print(f"  ONNX exported to {onnx_dir}/", flush=True)
+        except Exception as e:
+            print(f"  Warning: ONNX export failed: {e}", flush=True)
+
+        # Rename artifacts with run_name prefix
+        if run_name:
+            for name in ["best_model.pt", "final_model.pt"]:
+                src = os.path.join(save_dir, name)
+                dst = os.path.join(save_dir, _prefixed(name))
+                if os.path.isfile(src):
+                    shutil.move(src, dst)
+            onnx_dir = os.path.join(save_dir, "onnx")
+            if os.path.isdir(onnx_dir):
+                for fname in list(os.listdir(onnx_dir)):
+                    src = os.path.join(onnx_dir, fname)
+                    dst = os.path.join(onnx_dir, _prefixed(fname))
+                    if os.path.isfile(src):
+                        shutil.move(src, dst)
+            bundle_dir = os.path.join(save_dir, "bundle")
+            if os.path.isdir(bundle_dir):
+                for fname in list(os.listdir(bundle_dir)):
+                    src = os.path.join(bundle_dir, fname)
+                    dst = os.path.join(bundle_dir, _prefixed(fname))
+                    if os.path.isfile(src):
+                        shutil.move(src, dst)
+
+        # Upload
+        try:
+            from src.services.upload_service import upload_file, upload_directory
+            bundle_dir = os.path.join(save_dir, "bundle")
+            onnx_dir = os.path.join(save_dir, "onnx")
+            if os.path.isdir(bundle_dir):
+                for fname in sorted(os.listdir(bundle_dir)):
+                    fpath = os.path.join(bundle_dir, fname)
+                    if os.path.isfile(fpath):
+                        upload_file(fpath)
+            if os.path.isdir(onnx_dir):
+                urls = upload_directory(onnx_dir)
+                print(f"  Uploaded {len(urls)} ONNX files", flush=True)
+            best_name = _prefixed("best_model.pt")
+            best_path = os.path.join(save_dir, best_name)
+            if os.path.isfile(best_path):
+                upload_file(best_path)
+        except Exception as e:
+            print(f"  Warning: upload failed: {e}", flush=True)
