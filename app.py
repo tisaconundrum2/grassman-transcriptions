@@ -268,6 +268,7 @@ def cmd_cache(args: argparse.Namespace) -> None:
     dataset.load_recipe(args.recipe,
                         max_samples_per_source=args.max_per_source,
                         upload_repo=args.repo,
+                        samples_per_shard=args.samples_per_shard,
                         workers=args.workers)
     print(f"\n  Caching complete in {(time.time() - start)/60:.1f} minutes")
 
@@ -415,6 +416,7 @@ def main() -> None:
     p.add_argument("--repo", required=True, help="HF Dataset repo")
     p.add_argument("--cache-dir", default="mel_cache")
     p.add_argument("--max-per-source", type=int, default=None)
+    p.add_argument("--samples-per-shard", type=int, default=5000, help="Samples per shard file (default 5000)")
     p.add_argument("--workers", type=int, default=0, help="Parallel mel workers (0=sequential, default)")
 
     # export
