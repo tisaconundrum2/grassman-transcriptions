@@ -142,23 +142,157 @@ class PrefetchShardRepository(HubShardRepository):
             executor.shutdown(wait=False, cancel_futures=True)
 
 
+def _is_tar_shard(name: str) -> bool:
+    return name.startswith("shard_") and name.endswith(".tar")
+
+
+def _load_tar_shard(path: str | Path) -> list[Sample]:
+    """Load a .tar shard produced by the .NET Precalculate.Mel.Spectrograms worker.
+
+    Each sample is two entries: NNNNNN.f32 (little-endian float32 mel) and
+    NNNNNN.json (metadata with shape, token_ids). Reconstructs (mel, tokens)
+    tuples matching the .pt shard format.
+    """
+    import tarfile
+    import numpy as np
+
+    samples: dict[str, dict] = {}
+    with tarfile.open(path, "r") as tar:
+        for member in tar.getmembers():
+            if not member.isfile():
+                continue
+            key = member.name.rsplit(".", 1)[0]  # "000042"
+            ext = member.name.rsplit(".", 1)[-1]  # "f32" or "json"
+
+            if key not in samples:
+                samples[key] = {}
+
+            f = tar.extractfile(member)
+            if f is None:
+                continue
+
+            if ext == "f32":
+                samples[key]["mel_bytes"] = f.read()
+            elif ext == "json":
+                samples[key]["meta"] = json.loads(f.read())
+
+    result: list[Sample] = []
+    for key in sorted(samples.keys()):
+        entry = samples[key]
+        meta = entry.get("meta")
+        mel_bytes = entry.get("mel_bytes")
+        if meta is None or mel_bytes is None:
+            continue
+        shape = meta["shape"]  # [mel_bins, frames]
+        mel = torch.from_numpy(
+            np.frombuffer(mel_bytes, dtype="<f4").copy().reshape(shape)
+        )
+        tokens = torch.tensor(meta["token_ids"], dtype=torch.long)
+        result.append((mel, tokens))
+    return result
+
+
+class TarShardRepository(IShardRepository):
+    """Reads .tar shards produced by the .NET mel spectrogram worker.
+
+    Works with both local paths and HF Hub repos. Tar shards contain
+    paired .f32 (mel data) and .json (metadata) entries per sample.
+    """
+
+    def __init__(self, path: str):
+        self._base = Path(path)
+
+    def list_shards(self) -> list[str]:
+        return sorted(f.name for f in self._base.iterdir() if _is_tar_shard(f.name))
+
+    def total_samples(self) -> int:
+        return len(self.list_shards()) * 5000  # Default shard size
+
+    def iter_shards(self, shard_names: list[str]) -> Iterator[list[Sample]]:
+        for name in shard_names:
+            data = _load_tar_shard(self._base / name)
+            yield data
+            del data
+            gc.collect()
+
+
+class HubTarShardRepository(HubShardRepository):
+    """Downloads .tar shards from HF Hub, one at a time.
+
+    Same download logic as HubShardRepository but loads .tar instead of .pt.
+    """
+
+    def list_shards(self) -> list[str]:
+        from huggingface_hub import list_repo_files
+        files = list_repo_files(self._repo_id, repo_type="dataset", token=self._token)
+        # Tar shards are under shards/ prefix
+        return sorted(
+            f for f in files
+            if f.endswith(".tar") and "shard_" in f
+        )
+
+    @staticmethod
+    def _load_and_clean(path: str, tmp_dir: str) -> list[Sample]:
+        try:
+            return _load_tar_shard(path)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 FETCH_MODES = ("auto", "local", "stream", "prefetch")
 
 
 def make_shard_repository(source: str, mode: str = "auto") -> IShardRepository:
     """Pick a shard repository.
 
-    auto      local if `source` is an existing directory, else prefetch
-    local     LocalShardRepository (source is a path / mount point)
-    stream    HubShardRepository (source is a repo id)
-    prefetch  PrefetchShardRepository (source is a repo id)
+    auto      local if `source` is an existing directory, else prefetch.
+              Auto-detects .tar vs .pt shards.
+    local     LocalShardRepository for .pt, TarShardRepository for .tar
+    stream    HubShardRepository for .pt, HubTarShardRepository for .tar
+    prefetch  PrefetchShardRepository for .pt (tar uses stream for now)
     """
     if mode == "auto":
         mode = "local" if os.path.isdir(source) else "prefetch"
+
     if mode == "local":
+        path = Path(source)
+        # Auto-detect format: check for .tar shards first, then .pt
+        if path.is_dir():
+            has_tar = any(f.name.endswith(".tar") for f in path.iterdir() if "shard_" in f.name)
+            # Also check shards/ subdirectory
+            shards_dir = path / "shards"
+            if shards_dir.is_dir():
+                has_tar = any(f.name.endswith(".tar") for f in shards_dir.iterdir() if "shard_" in f.name)
+                if has_tar:
+                    return TarShardRepository(str(shards_dir))
+            if has_tar:
+                return TarShardRepository(source)
         return LocalShardRepository(source)
+
     if mode == "stream":
+        # Check if repo has .tar shards
+        try:
+            from huggingface_hub import list_repo_files
+            token = os.environ.get("HF_TOKEN")
+            files = list_repo_files(source, repo_type="dataset", token=token)
+            has_tar = any(f.endswith(".tar") and "shard_" in f for f in files)
+            if has_tar:
+                return HubTarShardRepository(source)
+        except Exception:
+            pass
         return HubShardRepository(source)
+
     if mode == "prefetch":
+        # Check for .tar shards in repo
+        try:
+            from huggingface_hub import list_repo_files
+            token = os.environ.get("HF_TOKEN")
+            files = list_repo_files(source, repo_type="dataset", token=token)
+            has_tar = any(f.endswith(".tar") and "shard_" in f for f in files)
+            if has_tar:
+                return HubTarShardRepository(source)  # No prefetch variant yet for tar
+        except Exception:
+            pass
         return PrefetchShardRepository(source)
+
     raise ValueError(f"Unknown fetch mode '{mode}', expected one of {FETCH_MODES}")

@@ -4,5 +4,7 @@ from .shard_repository import (
     LocalShardRepository,
     HubShardRepository,
     PrefetchShardRepository,
+    TarShardRepository,
+    HubTarShardRepository,
     make_shard_repository,
 )
