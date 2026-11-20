@@ -58,3 +58,13 @@ recipes:
       config: clean
       split: train
       max_samples: 30000  # ~250h subset of 30K hours
+
+  # Partial recipe for appending missing sources to an existing cache
+  1750h-remaining:
+    - name: facebook/voxpopuli
+      config: en
+      split: train
+    - name: MLCommons/peoples_speech
+      config: clean
+      split: train
+      max_samples: 30000
