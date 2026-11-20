@@ -6,5 +6,6 @@ from .shard_repository import (
     PrefetchShardRepository,
     TarShardRepository,
     HubTarShardRepository,
+    PrefetchTarShardRepository,
     make_shard_repository,
 )

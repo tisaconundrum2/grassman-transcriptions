@@ -149,46 +149,41 @@ def _is_tar_shard(name: str) -> bool:
 def _load_tar_shard(path: str | Path) -> list[Sample]:
     """Load a .tar shard produced by the .NET Precalculate.Mel.Spectrograms worker.
 
-    Each sample is two entries: NNNNNN.f32 (little-endian float32 mel) and
-    NNNNNN.json (metadata with shape, token_ids). Reconstructs (mel, tokens)
-    tuples matching the .pt shard format.
+    Each sample is two consecutive entries: NNNNNN.f32 (little-endian float32 mel)
+    and NNNNNN.json (metadata with shape, token_ids). Entries are always written
+    in order by the .NET writer, so we stream them in a single pass without
+    buffering the entire tar into a dict.
     """
     import tarfile
     import numpy as np
 
-    samples: dict[str, dict] = {}
+    result: list[Sample] = []
+    pending_mel: bytes | None = None
+    pending_key: str | None = None
+
     with tarfile.open(path, "r") as tar:
-        for member in tar.getmembers():
+        for member in tar:
             if not member.isfile():
                 continue
-            key = member.name.rsplit(".", 1)[0]  # "000042"
-            ext = member.name.rsplit(".", 1)[-1]  # "f32" or "json"
-
-            if key not in samples:
-                samples[key] = {}
-
+            key, ext = member.name.rsplit(".", 1)
             f = tar.extractfile(member)
             if f is None:
                 continue
 
             if ext == "f32":
-                samples[key]["mel_bytes"] = f.read()
-            elif ext == "json":
-                samples[key]["meta"] = json.loads(f.read())
+                pending_mel = f.read()
+                pending_key = key
+            elif ext == "json" and pending_mel is not None and pending_key == key:
+                meta = json.loads(f.read())
+                shape = meta["shape"]  # [mel_bins, frames]
+                mel = torch.from_numpy(
+                    np.frombuffer(pending_mel, dtype="<f4").copy().reshape(shape)
+                )
+                tokens = torch.tensor(meta["token_ids"], dtype=torch.long)
+                result.append((mel, tokens))
+                pending_mel = None
+                pending_key = None
 
-    result: list[Sample] = []
-    for key in sorted(samples.keys()):
-        entry = samples[key]
-        meta = entry.get("meta")
-        mel_bytes = entry.get("mel_bytes")
-        if meta is None or mel_bytes is None:
-            continue
-        shape = meta["shape"]  # [mel_bins, frames]
-        mel = torch.from_numpy(
-            np.frombuffer(mel_bytes, dtype="<f4").copy().reshape(shape)
-        )
-        tokens = torch.tensor(meta["token_ids"], dtype=torch.long)
-        result.append((mel, tokens))
     return result
 
 
@@ -237,6 +232,31 @@ class HubTarShardRepository(HubShardRepository):
             return _load_tar_shard(path)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+class PrefetchTarShardRepository(HubTarShardRepository):
+    """Hub download of .tar shards with one-ahead prefetch.
+
+    Same prefetch strategy as PrefetchShardRepository: a background thread
+    downloads shard n+1 while shard n is being consumed.
+    """
+
+    def iter_shards(self, shard_names: list[str]) -> Iterator[list[Sample]]:
+        if not shard_names:
+            return
+        executor = ThreadPoolExecutor(max_workers=1)
+        try:
+            pending: Future = executor.submit(self._download, shard_names[0])
+            for i in range(len(shard_names)):
+                path, tmp_dir = pending.result()
+                if i + 1 < len(shard_names):
+                    pending = executor.submit(self._download, shard_names[i + 1])
+                data = self._load_and_clean(path, tmp_dir)
+                yield data
+                del data
+                gc.collect()
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
 
 FETCH_MODES = ("auto", "local", "stream", "prefetch")
@@ -290,7 +310,7 @@ def make_shard_repository(source: str, mode: str = "auto") -> IShardRepository:
             files = list_repo_files(source, repo_type="dataset", token=token)
             has_tar = any(f.endswith(".tar") and "shard_" in f for f in files)
             if has_tar:
-                return HubTarShardRepository(source)  # No prefetch variant yet for tar
+                return PrefetchTarShardRepository(source)
         except Exception:
             pass
         return PrefetchShardRepository(source)
