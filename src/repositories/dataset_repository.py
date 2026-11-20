@@ -285,7 +285,12 @@ class DatasetRepository:
         del ds
 
     def _load(self, dataset_name: str, config_name: str | None, split: str):
-        """Load a dataset from local mount or Hub."""
+        """Load a dataset from local mount or Hub — always streaming.
+
+        Streaming avoids building Arrow caches on disk, which is critical for
+        mounted volumes where load_dataset would otherwise cache every split's
+        parquet files and blow past the ephemeral disk limit.
+        """
         from datasets import load_dataset
         if self._input_dir:
             repo_name = dataset_name.split("/")[-1]
@@ -295,14 +300,13 @@ class DatasetRepository:
                     f"Mount not found: {local_path} "
                     f"(expected from dataset '{dataset_name}'). "
                     f"Add -v hf://datasets/{dataset_name}:{local_path}:ro")
-            print(f"      Loading from: {local_path} (config={config_name}, "
+            print(f"      Streaming from mount: {local_path} (config={config_name}, "
                   f"split={split})", flush=True)
-            ds = load_dataset(local_path, config_name, split=split)
-            print(f"      Loaded {len(ds)} samples", flush=True)
-            return ds
+            return load_dataset(local_path, config_name, split=split, streaming=True)
         return load_dataset(dataset_name, config_name, split=split, streaming=True)
 
     def fetch_full(self, dataset_name: str, split: str,
                    config_name: str | None = None):
         """Download a full (non-streaming) HF dataset split. Returns the HF dataset object."""
-        return self._load(dataset_name, config_name, split)
+        from datasets import load_dataset
+        return load_dataset(dataset_name, config_name, split=split)
