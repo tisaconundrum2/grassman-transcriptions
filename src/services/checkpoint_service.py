@@ -65,6 +65,12 @@ class CheckpointService:
             local_ckpt = hf_hub_download(
                 self._repo_id, ckpt_path, repo_type="dataset", token=token)
             state_dict = torch.load(local_ckpt, weights_only=True, map_location="cpu")
+            # Remap legacy key names (encoder.idx_i → plucker.idx_i)
+            state_dict = {
+                k.replace(".encoder.idx_i", ".plucker.idx_i")
+                 .replace(".encoder.idx_j", ".plucker.idx_j"): v
+                for k, v in state_dict.items()
+            }
             model.load_state_dict(state_dict)
             del state_dict
 
