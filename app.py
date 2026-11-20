@@ -292,7 +292,7 @@ def cmd_export(args: argparse.Namespace) -> None:
     from dataclasses import asdict
     from pathlib import Path
     from src.services.model_hub_service import load_model
-    from src.services.export_service import export_seq2seq, export_ctc, verify_onnx
+    from src.services.export_service import export_seq2seq, export_ctc, export_ctc_e2e, verify_onnx
 
     print(f"\n  Loading model from {args.model}...")
     model, config, tokenizer = load_model(args.model, device="cpu")
@@ -303,6 +303,8 @@ def cmd_export(args: argparse.Namespace) -> None:
         export_seq2seq(model, config, args.output, args.opset)
     else:
         export_ctc(model, config, args.output, args.opset)
+        if args.e2e:
+            export_ctc_e2e(model, config, args.output, args.opset)
 
     out = Path(args.output)
     with open(out / "config.json", "w") as f:
@@ -435,8 +437,8 @@ def main() -> None:
     p.add_argument("--output", default="onnx_export")
     p.add_argument("--opset", type=int, default=18)
     p.add_argument("--verify", action="store_true")
-
-    # eval
+    p.add_argument("--e2e", action="store_true",
+                   help="Also export end-to-end model (audio in, text out, mel baked in)")
     p = sub.add_parser("eval", help="Evaluate WER/CER on LibriSpeech")
     p.add_argument("--model", default="eval_model/best_model.pt")
     p.add_argument("--config", default="eval_model/config.json")
