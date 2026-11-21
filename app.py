@@ -171,8 +171,11 @@ def cmd_train(args: argparse.Namespace) -> None:
         ckpt_repo = args.from_cache
     ckpt_svc = CheckpointService(ckpt_repo, args.save_dir, args.run_name)
     assert model_ctrl.nn_model is not None
-    start_epoch, best_val_loss = ckpt_svc.try_resume(model_ctrl.nn_model,
+    start_epoch, _resumed_val = ckpt_svc.try_resume(model_ctrl.nn_model,
                                                      trainer=model_ctrl.trainer)
+    # Always start with inf so the first epoch saves a checkpoint,
+    # even when resuming across mel format changes.
+    best_val_loss = float("inf")
 
     _log_memory("Before training")
 
