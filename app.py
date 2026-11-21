@@ -205,19 +205,15 @@ def cmd_train(args: argparse.Namespace) -> None:
               f"lr: {lr:.2e}  ({elapsed:.1f}s, total: {total_elapsed/60:.1f}min)"
               f"{mem_str}", flush=True)
 
+        # Upload checkpoint every epoch (~43MB, cheap insurance)
+        assert model_ctrl.nn_model is not None
+        ckpt_svc.upload(epoch, val_loss, trainer=model_ctrl.trainer)
+
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            assert model_ctrl.nn_model is not None
             torch.save(model_ctrl.nn_model.state_dict(),
                        os.path.join(args.save_dir, "best_model.pt"))
             print(f"    -> Saved best model (val_loss={val_loss:.4f})", flush=True)
-            # Upload checkpoint to HF repo for crash resilience
-            ckpt_svc.upload(epoch, val_loss, trainer=model_ctrl.trainer)
-
-        if epoch % 10 == 0:
-            assert model_ctrl.nn_model is not None
-            torch.save(model_ctrl.nn_model.state_dict(),
-                       os.path.join(args.save_dir, f"epoch_{epoch}.pt"))
 
         if epoch % args.decode_every == 0 or epoch == 1:
             model_ctrl.decode_samples(dataset._val_ds)
