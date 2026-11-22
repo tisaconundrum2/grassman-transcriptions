@@ -259,11 +259,101 @@ class PrefetchTarShardRepository(HubTarShardRepository):
             executor.shutdown(wait=False, cancel_futures=True)
 
 
+class MultiShardRepository(IShardRepository):
+    """Combines multiple shard repositories into one.
+
+    Shard names are prefixed with an index to avoid collisions:
+    "0:shard_0000.tar", "1:shard_0000.tar", etc.
+    """
+
+    def __init__(self, repos: list[IShardRepository], labels: list[str] | None = None):
+        self._repos = repos
+        self._labels = labels or [str(i) for i in range(len(repos))]
+
+    def list_shards(self) -> list[str]:
+        result = []
+        for i, repo in enumerate(self._repos):
+            for name in repo.list_shards():
+                result.append(f"{i}:{name}")
+        return result
+
+    def total_samples(self) -> int:
+        return sum(r.total_samples() for r in self._repos)
+
+    def iter_shards(self, shard_names: list[str]) -> Iterator[list[Sample]]:
+        for prefixed in shard_names:
+            idx_str, name = prefixed.split(":", 1)
+            idx = int(idx_str)
+            for data in self._repos[idx].iter_shards([name]):
+                yield data
+
+    def source_index(self, shard_name: str) -> int:
+        return int(shard_name.split(":", 1)[0])
+
+    @property
+    def labels(self) -> list[str]:
+        return self._labels
+
+    def shards_by_source(self) -> list[list[str]]:
+        result: list[list[str]] = [[] for _ in self._repos]
+        for name in self.list_shards():
+            idx = self.source_index(name)
+            result[idx].append(name)
+        return result
+
+
 FETCH_MODES = ("auto", "local", "stream", "prefetch")
+
+
+def _make_single_shard_repository(source: str, mode: str) -> IShardRepository:
+    """Create a shard repository for a single source path/repo."""
+    resolved = mode
+    if resolved == "auto":
+        resolved = "local" if os.path.isdir(source) else "prefetch"
+
+    if resolved == "local":
+        path = Path(source)
+        if path.is_dir():
+            has_tar = any(f.name.endswith(".tar") for f in path.iterdir() if "shard_" in f.name)
+            shards_dir = path / "shards"
+            if shards_dir.is_dir():
+                has_tar_sub = any(f.name.endswith(".tar") for f in shards_dir.iterdir() if "shard_" in f.name)
+                if has_tar_sub:
+                    return TarShardRepository(str(shards_dir))
+            if has_tar:
+                return TarShardRepository(source)
+        return LocalShardRepository(source)
+
+    if resolved == "stream":
+        try:
+            from huggingface_hub import list_repo_files
+            token = os.environ.get("HF_TOKEN")
+            files = list_repo_files(source, repo_type="dataset", token=token)
+            if any(f.endswith(".tar") and "shard_" in f for f in files):
+                return HubTarShardRepository(source)
+        except Exception:
+            pass
+        return HubShardRepository(source)
+
+    if resolved == "prefetch":
+        try:
+            from huggingface_hub import list_repo_files
+            token = os.environ.get("HF_TOKEN")
+            files = list_repo_files(source, repo_type="dataset", token=token)
+            if any(f.endswith(".tar") and "shard_" in f for f in files):
+                return PrefetchTarShardRepository(source)
+        except Exception:
+            pass
+        return PrefetchShardRepository(source)
+
+    raise ValueError(f"Unknown fetch mode '{resolved}', expected one of {FETCH_MODES}")
 
 
 def make_shard_repository(source: str, mode: str = "auto") -> IShardRepository:
     """Pick a shard repository.
+
+    source can be comma-separated for multiple paths/repos:
+      "/mnt/cache/shards,/mnt/cache/shards-noisy"
 
     auto      local if `source` is an existing directory, else prefetch.
               Auto-detects .tar vs .pt shards.
@@ -271,48 +361,10 @@ def make_shard_repository(source: str, mode: str = "auto") -> IShardRepository:
     stream    HubShardRepository for .pt, HubTarShardRepository for .tar
     prefetch  PrefetchShardRepository for .pt (tar uses stream for now)
     """
-    if mode == "auto":
-        mode = "local" if os.path.isdir(source) else "prefetch"
+    sources = [s.strip() for s in source.split(",") if s.strip()]
+    if len(sources) == 1:
+        return _make_single_shard_repository(sources[0], mode)
 
-    if mode == "local":
-        path = Path(source)
-        # Auto-detect format: check for .tar shards first, then .pt
-        if path.is_dir():
-            has_tar = any(f.name.endswith(".tar") for f in path.iterdir() if "shard_" in f.name)
-            # Also check shards/ subdirectory
-            shards_dir = path / "shards"
-            if shards_dir.is_dir():
-                has_tar = any(f.name.endswith(".tar") for f in shards_dir.iterdir() if "shard_" in f.name)
-                if has_tar:
-                    return TarShardRepository(str(shards_dir))
-            if has_tar:
-                return TarShardRepository(source)
-        return LocalShardRepository(source)
-
-    if mode == "stream":
-        # Check if repo has .tar shards
-        try:
-            from huggingface_hub import list_repo_files
-            token = os.environ.get("HF_TOKEN")
-            files = list_repo_files(source, repo_type="dataset", token=token)
-            has_tar = any(f.endswith(".tar") and "shard_" in f for f in files)
-            if has_tar:
-                return HubTarShardRepository(source)
-        except Exception:
-            pass
-        return HubShardRepository(source)
-
-    if mode == "prefetch":
-        # Check for .tar shards in repo
-        try:
-            from huggingface_hub import list_repo_files
-            token = os.environ.get("HF_TOKEN")
-            files = list_repo_files(source, repo_type="dataset", token=token)
-            has_tar = any(f.endswith(".tar") and "shard_" in f for f in files)
-            if has_tar:
-                return PrefetchTarShardRepository(source)
-        except Exception:
-            pass
-        return PrefetchShardRepository(source)
-
-    raise ValueError(f"Unknown fetch mode '{mode}', expected one of {FETCH_MODES}")
+    repos = [_make_single_shard_repository(s, mode) for s in sources]
+    labels = [os.path.basename(s.rstrip("/")) or s for s in sources]
+    return MultiShardRepository(repos, labels)

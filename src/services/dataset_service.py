@@ -303,16 +303,35 @@ class DatasetService:
         """Split loaded data into train/val/test."""
         if self._use_streaming:
             shards = self._streaming_shards
-            n = len(shards)
-            n_train = max(1, int(n * train_ratio))
-            n_val = max(1, int(n * val_ratio))
-            train_shards = shards[:n_train]
-            val_shards = shards[n_train:n_train + n_val]
-            test_shards = shards[n_train + n_val:] or val_shards
+            max_s = getattr(self, '_streaming_max_samples', None)
+
+            # Multi-source: draw proportionally from each source for val/test
+            from src.repositories.shard_repository import MultiShardRepository
+            if isinstance(self._shard_repo, MultiShardRepository):
+                by_source = self._shard_repo.shards_by_source()
+                labels = self._shard_repo.labels
+                train_shards, val_shards, test_shards = [], [], []
+                for i, src_shards in enumerate(by_source):
+                    n = len(src_shards)
+                    n_tr = max(1, int(n * train_ratio))
+                    n_va = max(1, int(n * val_ratio))
+                    train_shards.extend(src_shards[:n_tr])
+                    val_shards.extend(src_shards[n_tr:n_tr + n_va])
+                    rest = src_shards[n_tr + n_va:]
+                    test_shards.extend(rest or src_shards[n_tr:n_tr + n_va])
+                    n_te = len(rest) or n_va
+                    print(f"  Source '{labels[i]}': {n} shards → "
+                          f"train={n_tr}, val={n_va}, test={n_te}")
+            else:
+                n = len(shards)
+                n_train = max(1, int(n * train_ratio))
+                n_val = max(1, int(n * val_ratio))
+                train_shards = shards[:n_train]
+                val_shards = shards[n_train:n_train + n_val]
+                test_shards = shards[n_train + n_val:] or val_shards
 
             total = self._streaming_total
-            max_s = getattr(self, '_streaming_max_samples', None)
-            sps = total // n if n else 1
+            sps = total // len(shards) if shards else 1
 
             # Distribute max_samples proportionally across splits
             train_max = int(max_s * train_ratio) if max_s else None
