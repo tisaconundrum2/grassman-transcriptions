@@ -58,6 +58,12 @@ Try it live: **[tisaconundrum2.github.io/grassman-transcriptions](https://tisaco
 
 Runs entirely in the browser via ONNX + WASM. 11M params, 120x real-time on 16min audio.
 
+Available models:
+- **Grassmann (Plücker)** — 11M, trained on 100h
+- **Ablation (Symmetric)** — 11M, trained on 100h
+- **Ablation 1750h** — 11M, trained on 1750h
+- **Ablation 1750h b128** — 11M, trained on 1750h (batch 128, epoch 19)
+
 ## GPU Training on HF Jobs
 
 Training runs on [HF Jobs](https://huggingface.co/docs/hub/en/jobs) — per-second GPU billing, persistent secrets, auto-retry on failure. **Do not use HF Spaces for training** (ephemeral disk, health check kills, secrets require restarts).
@@ -156,6 +162,9 @@ hf jobs run \
 hf jobs logs -f tisaconundrum/<job_id>     # Stream logs
 hf jobs inspect tisaconundrum/<job_id>     # Check status
 hf jobs list                               # List all jobs
+
+# Or use the live dashboard (auto-polls logs, charts in browser)
+python live_tracker.py [JOB_ID]            # Opens http://localhost:8787
 ```
 
 ### Key flags
@@ -212,6 +221,7 @@ src/
   views/                # Console output
 app.py                  # Unified CLI (train, cache, export, eval, transcribe, demo)
 inference_onnx.py       # Standalone ONNX inference (no PyTorch dependency)
+live_tracker.py         # Real-time training dashboard (polls HF Jobs logs)
 demo/                   # Browser demo (GitHub Pages)
 ```
 

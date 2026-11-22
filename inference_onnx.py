@@ -46,17 +46,25 @@ def mel_spectrogram_np(
     hop_length: int = 160,
     n_mels: int = 80,
 ) -> np.ndarray:
-    """Compute log-mel spectrogram using numpy (no torch/librosa)."""
+    """Compute log-mel spectrogram using numpy (no torch/librosa).
+
+    Matches the .NET MelTransform / OnnxMelSpectrogram exactly:
+    periodic Hann window, zero-pad to next power-of-2, take first n_fft//2+1 bins.
+    """
+    fft_size = 1 << (n_fft - 1).bit_length()  # next power of 2 (512 for n_fft=400)
+    n_bins = n_fft // 2 + 1  # 201 — matches .NET (not fft_size//2+1)
+
     # STFT
     n_frames = 1 + (len(waveform) - n_fft) // hop_length
     frames = np.stack([
         waveform[i * hop_length : i * hop_length + n_fft]
         for i in range(n_frames)
     ])
-    window = np.hanning(n_fft)
+    # Periodic Hann window (matches torch.hann_window(periodic=True) and .NET)
+    window = np.array([0.5 * (1 - np.cos(2 * np.pi * i / n_fft)) for i in range(n_fft)])
     frames = frames * window
-    stft = np.fft.rfft(frames, n=n_fft)
-    power = np.abs(stft) ** 2
+    stft = np.fft.rfft(frames, n=fft_size)  # zero-pad to fft_size
+    power = np.abs(stft[:, :n_bins]) ** 2  # only first n_bins (201)
 
     # Mel filterbank
     fmin, fmax = 0.0, sr / 2.0
@@ -66,7 +74,7 @@ def mel_spectrogram_np(
     hz_points = 700.0 * (10.0 ** (mel_points / 2595.0) - 1.0)
     bin_points = np.floor((n_fft + 1) * hz_points / sr).astype(int)
 
-    filterbank = np.zeros((n_mels, n_fft // 2 + 1))
+    filterbank = np.zeros((n_mels, n_bins))
     for i in range(n_mels):
         left, center, right = bin_points[i], bin_points[i + 1], bin_points[i + 2]
         for j in range(left, center):
