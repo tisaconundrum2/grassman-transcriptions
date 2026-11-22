@@ -77,9 +77,17 @@ def load_model(
     else:
         model = GrassmannTranscriptionModel(config)
 
-    # Load weights
+    # Load weights — try as-is first, then remap legacy key names
     state = torch.load(path / "model.pt", map_location=device, weights_only=True)
-    model.load_state_dict(state)
+    try:
+        model.load_state_dict(state)
+    except RuntimeError:
+        state = {
+            k.replace(".plucker.idx_i", ".encoder.idx_i")
+             .replace(".plucker.idx_j", ".encoder.idx_j"): v
+            for k, v in state.items()
+        }
+        model.load_state_dict(state)
     model.to(device)
     model.eval()
 

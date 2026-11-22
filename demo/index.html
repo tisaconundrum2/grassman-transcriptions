@@ -49,6 +49,7 @@
     <option value="grassmann-smol" selected>Grassmann (Plücker) — 11M</option>
     <option value="ablation-smol">Ablation (Symmetric) — 11M</option>
     <option value="ablation-1750h">Ablation 1750h (Symmetric) — 11M</option>
+    <option value="ablation-1750h-b128">Ablation 1750h b128 (Symmetric) — 11M</option>
   </select>
   <button id="onnxBtn" class="small-btn">Load local .onnx</button>
   <input type="file" id="onnxInput" accept=".onnx">
@@ -87,6 +88,11 @@ const MODELS = {
     name: 'Ablation 1750h (Symmetric)',
     url: 'asr-models/ablation-1750h.onnx',
     size: '48 MB',
+  },
+  'ablation-1750h-b128': {
+    name: 'Ablation 1750h b128 (Symmetric)',
+    url: 'asr-models/ablation-1750h-b128.onnx',
+    size: '49 MB',
   },
 };
 
