@@ -65,24 +65,13 @@ class CheckpointService:
             local_ckpt = hf_hub_download(
                 self._repo_id, ckpt_path, repo_type="dataset", token=token)
             state_dict = torch.load(local_ckpt, weights_only=True, map_location="cpu")
-            # Try loading as-is, then remap key names in both directions
-            try:
-                model.load_state_dict(state_dict)
-            except RuntimeError:
-                remapped = {
-                    k.replace(".encoder.idx_i", ".plucker.idx_i")
-                     .replace(".encoder.idx_j", ".plucker.idx_j"): v
-                    for k, v in state_dict.items()
-                }
-                try:
-                    model.load_state_dict(remapped)
-                except RuntimeError:
-                    remapped = {
-                        k.replace(".plucker.idx_i", ".encoder.idx_i")
-                         .replace(".plucker.idx_j", ".encoder.idx_j"): v
-                        for k, v in state_dict.items()
-                    }
-                    model.load_state_dict(remapped)
+            # Remap legacy key names (encoder.idx_i → plucker.idx_i)
+            state_dict = {
+                k.replace(".encoder.idx_i", ".plucker.idx_i")
+                 .replace(".encoder.idx_j", ".plucker.idx_j"): v
+                for k, v in state_dict.items()
+            }
+            model.load_state_dict(state_dict)
             del state_dict
 
             # Save locally so training can continue saving to same path
@@ -130,7 +119,7 @@ class CheckpointService:
                        config=None) -> str | None:
         """Save a per-epoch copy of weights + ONNX into an archive directory.
 
-        Layout: {save_dir}/archive/epoch_{epoch:03d}/
+        Layout: {save_dir}/archive/{run}-epoch_{epoch:03d}/
             model.pt, config.json, meta.json, model.onnx
         Returns the archive directory path, or None on failure.
         """
@@ -143,17 +132,13 @@ class CheckpointService:
         if not os.path.isfile(local_pt):
             return None
 
-        # Copy weights
-        import shutil
         shutil.copy2(local_pt, os.path.join(archive_dir, "model.pt"))
 
-        # Save meta
         meta = {"epoch": epoch, "val_loss": val_loss,
                 "run_name": self._run_name}
         with open(os.path.join(archive_dir, "meta.json"), "w") as f:
             json.dump(meta, f, indent=2)
 
-        # Save config + export ONNX if model and config are provided
         if config is not None:
             from dataclasses import asdict
             with open(os.path.join(archive_dir, "config.json"), "w") as f:
@@ -161,7 +146,7 @@ class CheckpointService:
 
         if model is not None and config is not None:
             try:
-                from src.services.export_service import export_ctc, export_ctc_e2e
+                from src.services.export_service import export_ctc
                 export_ctc(model, config, archive_dir)
                 print(f"    -> ONNX archived: {archive_dir}/model.onnx", flush=True)
             except Exception as e:
@@ -177,7 +162,6 @@ class CheckpointService:
         If model and config are provided, also archives a per-epoch copy with
         ONNX export so no checkpoint is ever lost.
         """
-        # Archive locally before uploading (never lose an epoch)
         archive_dir = self._archive_epoch(epoch, val_loss, model=model,
                                           config=config)
         if archive_dir:

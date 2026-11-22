@@ -206,7 +206,7 @@ def cmd_train(args: argparse.Namespace) -> None:
               f"{mem_str}", flush=True)
 
         # Upload checkpoint every epoch (~43MB, cheap insurance)
-        # Also archives per-epoch weights + ONNX into save_dir/archive/
+        # Pass model+config to enable per-epoch archiving with ONNX export
         assert model_ctrl.nn_model is not None
         ckpt_svc.upload(epoch, val_loss, trainer=model_ctrl.trainer,
                         model=model_ctrl.nn_model, config=config)
@@ -338,16 +338,7 @@ def cmd_eval(args: argparse.Namespace) -> None:
     config.vocab_size = tokenizer.vocab_size
 
     model = GrassmannTranscriptionModel(config)
-    state = torch.load(args.model, map_location="cpu", weights_only=True)
-    try:
-        model.load_state_dict(state)
-    except RuntimeError:
-        state = {
-            k.replace(".plucker.idx_i", ".encoder.idx_i")
-             .replace(".plucker.idx_j", ".encoder.idx_j"): v
-            for k, v in state.items()
-        }
-        model.load_state_dict(state)
+    model.load_state_dict(torch.load(args.model, map_location="cpu", weights_only=True))
     model.eval()
     print(f"  {sum(p.numel() for p in model.parameters()):,} parameters")
 
