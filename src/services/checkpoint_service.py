@@ -65,13 +65,24 @@ class CheckpointService:
             local_ckpt = hf_hub_download(
                 self._repo_id, ckpt_path, repo_type="dataset", token=token)
             state_dict = torch.load(local_ckpt, weights_only=True, map_location="cpu")
-            # Remap legacy key names (encoder.idx_i → plucker.idx_i)
-            state_dict = {
-                k.replace(".encoder.idx_i", ".plucker.idx_i")
-                 .replace(".encoder.idx_j", ".plucker.idx_j"): v
-                for k, v in state_dict.items()
-            }
-            model.load_state_dict(state_dict)
+            # Try loading as-is, then remap key names in both directions
+            try:
+                model.load_state_dict(state_dict)
+            except RuntimeError:
+                remapped = {
+                    k.replace(".plucker.idx_i", ".encoder.idx_i")
+                     .replace(".plucker.idx_j", ".encoder.idx_j"): v
+                    for k, v in state_dict.items()
+                }
+                try:
+                    model.load_state_dict(remapped)
+                except RuntimeError:
+                    remapped = {
+                        k.replace(".encoder.idx_i", ".plucker.idx_i")
+                         .replace(".encoder.idx_j", ".plucker.idx_j"): v
+                        for k, v in state_dict.items()
+                    }
+                    model.load_state_dict(remapped)
             del state_dict
 
             # Save locally so training can continue saving to same path
