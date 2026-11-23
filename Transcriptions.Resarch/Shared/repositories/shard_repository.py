@@ -217,14 +217,23 @@ class HubTarShardRepository(HubShardRepository):
     Same download logic as HubShardRepository but loads .tar instead of .pt.
     """
 
+    def __init__(self, repo_id: str, token: str | None = None,
+                 prefix: str | None = None):
+        super().__init__(repo_id, token)
+        self._prefix = (prefix if prefix is not None
+                        else os.environ.get("SHARD_PREFIX", "shards/"))
+
     def list_shards(self) -> list[str]:
         from huggingface_hub import list_repo_files
         files = list_repo_files(self._repo_id, repo_type="dataset", token=self._token)
-        # Tar shards are under shards/ prefix
+        # Default "shards/" matches the local mount layout; other folders (e.g. shards-noisy/) are opt-in.
         return sorted(
             f for f in files
-            if f.endswith(".tar") and "shard_" in f
+            if f.startswith(self._prefix) and _is_tar_shard(f.rsplit("/", 1)[-1])
         )
+
+    def total_samples(self) -> int:
+        return len(self.list_shards()) * 5000
 
     @staticmethod
     def _load_and_clean(path: str, tmp_dir: str) -> list[Sample]:
