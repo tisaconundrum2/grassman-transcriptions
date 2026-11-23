@@ -1,0 +1,70 @@
+# Dataset recipes for training.
+# Each recipe is a list of HuggingFace dataset sources.
+# Use with: python app.py train --recipe <name>
+#
+# Fields per source:
+#   name:        HuggingFace dataset ID (required)
+#   split:       Dataset split name (required)
+#   config:      Dataset config/subset (optional)
+#   max_samples: Cap samples from this source (optional)
+
+schemas:
+  openslr/librispeech_asr:
+    audio: audio
+    text: text
+  mozilla-foundation/common_voice:
+    audio: audio
+    text: sentence
+  google/fleurs:
+    audio: audio
+    text: transcription
+  speechcolab/gigaspeech:
+    audio: audio
+    text: text
+  facebook/voxpopuli:
+    audio: audio
+    text: normalized_text
+  MLCommons/peoples_speech:
+    audio: audio
+    text: text
+  espnet/yodas:
+    audio: audio
+    text: text
+
+recipes:
+  librispeech-100:
+    - name: openslr/librispeech_asr
+      split: train.clean.100
+
+  librispeech-960:
+    - name: openslr/librispeech_asr
+      split: train.clean.100
+    - name: openslr/librispeech_asr
+      split: train.clean.360
+    - name: openslr/librispeech_asr
+      split: train.other.500
+
+  1750h:
+    - name: openslr/librispeech_asr
+      split: train.clean.100
+    - name: openslr/librispeech_asr
+      split: train.clean.360
+    - name: openslr/librispeech_asr
+      split: train.other.500
+    - name: facebook/voxpopuli
+      config: en
+      split: train
+    - name: MLCommons/peoples_speech
+      config: clean
+      split: train
+      max_samples: 30000  # ~250h subset of 30K hours
+
+  # Partial recipe for appending missing sources to an existing cache
+  1750h-remaining:
+    - name: facebook/voxpopuli
+      config: en
+      split: train
+    - name: MLCommons/peoples_speech
+      config: clean
+      split: train
+      max_samples: 30000
