@@ -14,10 +14,11 @@ RUN pip install --no-cache-dir 'datasets<4' librosa soundfile jiwer
 
 # Copy shared code + both training model folders (eval needs either) + eval app
 COPY Transcriptions.Resarch/Shared/ Shared/
-COPY Transcriptions.Resarch/Train.Ablation/ Train/Ablation/
-COPY Transcriptions.Resarch/Train.Grassman/ Train/Grassman/
+COPY Transcriptions.Resarch/Train.Ablation/ Train.Ablation/
+COPY Transcriptions.Resarch/Train.Grassman/ Train.Grassman/
 COPY Transcriptions.Resarch/Test.Evaluation/ Test.Evaluation/
 
-# No CMD — command is specified at launch
+# No CMD — command is specified at launch via `hf jobs run`
 # Example:
-#   python -u Test.Evaluation/app.py
+#   hf jobs run --flavor t4-small ghcr.io/tisaconundrum2/grassmann-eval:<sha> \
+#     -- python -u Test.Evaluation/app.py

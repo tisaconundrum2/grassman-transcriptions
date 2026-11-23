@@ -19,5 +19,5 @@ COPY Transcriptions.Resarch/Train.Grassman/ Train.Grassman/
 
 # No CMD — command is specified at launch via `hf jobs run`
 # Example:
-#   hf jobs run --flavor t4-small ghcr.io/tisaconundrum2/grassmann-plucker:latest \
+#   hf jobs run --flavor t4-small ghcr.io/tisaconundrum2/grassmann-plucker:<sha> \
 #     -- python -u Train.Grassman/app.py

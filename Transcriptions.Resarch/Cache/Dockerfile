@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir 'datasets<4' librosa soundfile
 COPY Transcriptions.Resarch/Shared/ Shared/
 COPY Transcriptions.Resarch/Cache/ Cache/
 
-# No CMD — command is specified at launch
+# No CMD — command is specified at launch via `hf jobs run`
 # Example:
-#   python -u Cache/app.py
+#   hf jobs run --flavor t4-small ghcr.io/tisaconundrum2/grassmann-cache:<sha> \
+#     -- python -u Cache/app.py

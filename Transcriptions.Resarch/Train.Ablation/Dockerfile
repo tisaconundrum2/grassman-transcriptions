@@ -19,5 +19,5 @@ COPY Transcriptions.Resarch/Train.Ablation/ Train.Ablation/
 
 # No CMD — command is specified at launch via `hf jobs run`
 # Example:
-#   hf jobs run --flavor t4-small ghcr.io/tisaconundrum2/grassmann-ablation:latest \
+#   hf jobs run --flavor t4-small ghcr.io/tisaconundrum2/grassmann-ablation:<sha> \
 #     -- python -u Train.Ablation/app.py
