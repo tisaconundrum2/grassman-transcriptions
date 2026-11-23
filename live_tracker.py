@@ -189,6 +189,10 @@ DASHBOARD_HTML = r'''<!DOCTYPE html>
 <body>
 
 <h1><span class="live-dot" id="liveDot"></span> Live Training Tracker</h1>
+<div style="text-align:center;margin-bottom:12px">
+  <input id="jobInput" type="text" placeholder="Job ID" style="padding:6px 12px;border-radius:6px;border:1px solid #444;background:#1a1a2e;color:#e0e0e0;font-size:13px;width:320px;font-family:monospace">
+  <button onclick="switchJob()" style="padding:6px 14px;border-radius:6px;border:1px solid #444;background:#2d3748;color:#e0e0e0;cursor:pointer;font-size:13px;margin-left:4px">Switch</button>
+</div>
 <div class="subtitle" id="subtitle">Connecting...</div>
 
 <div class="stats" id="statsRow"></div>
@@ -398,8 +402,38 @@ async function poll() {
   }
 }
 
-poll();
+// Load job ID from URL ?job= param
+const params = new URLSearchParams(window.location.search);
+if (params.has('job')) {
+  fetch('/api/set_job?job=' + encodeURIComponent(params.get('job')))
+    .then(() => poll());
+} else {
+  poll();
+}
 setInterval(poll, POLL_MS);
+
+function switchJob() {
+  const id = document.getElementById('jobInput').value.trim();
+  if (!id) return;
+  const url = new URL(window.location);
+  url.searchParams.set('job', id);
+  window.history.replaceState({}, '', url);
+  fetch('/api/set_job?job=' + encodeURIComponent(id))
+    .then(() => { batchChart=null; batchChartLinear=null; epochChart=null; epochChartLinear=null;
+      document.getElementById('batchChart').getContext('2d').clearRect(0,0,9999,9999);
+      document.getElementById('batchChartLinear').getContext('2d').clearRect(0,0,9999,9999);
+      document.getElementById('epochChart').getContext('2d').clearRect(0,0,9999,9999);
+      document.getElementById('epochChartLinear').getContext('2d').clearRect(0,0,9999,9999);
+      poll();
+    });
+}
+
+// Pre-fill input from current state
+setTimeout(async () => {
+  const r = await fetch('/api/data');
+  const d = await r.json();
+  if (d.job_id) document.getElementById('jobInput').value = d.job_id;
+}, 500);
 </script>
 </body>
 </html>'''
@@ -427,6 +461,24 @@ class TrackerHandler(SimpleHTTPRequestHandler):
             self.wfile.write(payload.encode())
             return
 
+        if parsed.path == "/api/set_job":
+            params = parse_qs(parsed.query)
+            new_id = params.get("job", [None])[0]
+            if new_id:
+                with lock:
+                    state["job_id"] = new_id
+                    state["batches"] = []
+                    state["epochs"] = []
+                    state["model_info"] = {}
+                    state["status"] = "switching"
+                    state["error"] = None
+                print(f"  Switched to job: {new_id}", flush=True)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": True, "job_id": new_id}).encode())
+            return
+
         self.send_error(404)
 
     def log_message(self, format, *args):
@@ -441,29 +493,31 @@ def main():
         job_id = find_running_job()
 
     if not job_id:
-        print("  No running jobs found. Usage: python live_tracker.py <JOB_ID>")
-        sys.exit(1)
+        print("  No job ID provided. Use the browser UI to set one, or pass as argument.")
+        print("  Starting server anyway...")
 
     state["job_id"] = job_id
     print(f"  Tracking job: {job_id}")
     print(f"  Polling every {POLL_INTERVAL}s")
 
     # Initial fetch
-    print("  Fetching initial logs...")
-    raw = fetch_logs(job_id)
-    batches, epochs, model_info = parse_logs(raw)
-    state["batches"] = batches
-    state["epochs"] = epochs
-    state["model_info"] = model_info
-    state["last_update"] = time.time()
-    state["status"] = "running"
-    print(f"  Loaded {len(batches)} batches, {len(epochs)} epochs")
+    if job_id:
+        print("  Fetching initial logs...")
+        raw = fetch_logs(job_id)
+        batches, epochs, model_info = parse_logs(raw)
+        state["batches"] = batches
+        state["epochs"] = epochs
+        state["model_info"] = model_info
+        state["last_update"] = time.time()
+        state["status"] = "running"
+        print(f"  Loaded {len(batches)} batches, {len(epochs)} epochs")
 
     # Start background poller
     t = threading.Thread(target=poll_loop, daemon=True)
     t.start()
 
-    # Start HTTP server
+    # Start HTTP server (SO_REUSEADDR avoids "Address already in use" after restart)
+    HTTPServer.allow_reuse_address = True
     server = HTTPServer(("127.0.0.1", PORT), TrackerHandler)
     print(f"\n  Dashboard: http://localhost:{PORT}")
     print(f"  Press Ctrl+C to stop\n")
