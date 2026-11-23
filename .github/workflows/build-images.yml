@@ -4,10 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - Dockerfile.*
-      - src/**
-      - app.py
-      - recipes.yaml
+      - Transcriptions.Resarch/**
       - requirements.txt
       - .github/workflows/build-images.yml
   workflow_dispatch:
@@ -22,6 +19,21 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: ablation
+            dockerfile: Transcriptions.Resarch/Train.Ablation/Dockerfile
+            image: grassmann-ablation
+          - name: grassmann
+            dockerfile: Transcriptions.Resarch/Train.Grassman/Dockerfile
+            image: grassmann-plucker
+          - name: eval
+            dockerfile: Transcriptions.Resarch/Test.Evaluation/Dockerfile
+            image: grassmann-eval
+          - name: cache
+            dockerfile: Transcriptions.Resarch/Cache/Dockerfile
+            image: grassmann-cache
     steps:
       - uses: actions/checkout@v4
 
@@ -35,12 +47,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push
+      - name: Build and push ${{ matrix.name }}
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile
+          file: ${{ matrix.dockerfile }}
           push: true
-          tags: ${{ env.REGISTRY }}/${{ github.repository_owner }}/grassmann:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
