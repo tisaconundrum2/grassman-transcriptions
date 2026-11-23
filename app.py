@@ -338,7 +338,14 @@ def cmd_eval(args: argparse.Namespace) -> None:
     config.vocab_size = tokenizer.vocab_size
 
     model = GrassmannTranscriptionModel(config)
-    model.load_state_dict(torch.load(args.model, map_location="cpu", weights_only=True))
+    sd = torch.load(args.model, map_location="cpu", weights_only=True)
+    # Remap legacy checkpoint keys: plucker.idx_i/j <-> encoder.idx_i/j
+    remapped = {}
+    for k, v in sd.items():
+        nk = k.replace(".plucker.idx_", ".encoder.idx_") if ".plucker.idx_" in k else k
+        nk = nk.replace(".encoder.idx_", ".plucker.idx_") if nk == k and ".encoder.idx_" in k else nk
+        remapped[nk] = v
+    model.load_state_dict(remapped if remapped != sd else sd)
     model.eval()
     print(f"  {sum(p.numel() for p in model.parameters()):,} parameters")
 
