@@ -82,7 +82,8 @@ def preflight() -> None:
     """Synthetic data sanity check — verify model can forward-pass."""
     print("\n  Pre-flight check...", flush=True)
     config = GrassmannConfig(n_layers=2, d_model=128, r_reduced=16, d_ff=512,
-                              use_conformer=True, two_sided=True, use_ablation=False)
+                              use_seq2seq=False, use_conformer=True,
+                              two_sided=True, use_ablation=False)
     tokenizer = CharTokenizer()
     config.vocab_size = tokenizer.vocab_size
     model = ModelController(config, tokenizer,
