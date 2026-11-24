@@ -53,7 +53,11 @@ print(f"Cached {len(batches)} batches on {ctrl.trainer.device}", flush=True)
 
 
 def evaluate(epoch: int) -> float:
-    path = hf_hub_download(REPO, f"checkpoints/history/{RUN}-epoch_{epoch:03d}.pt", repo_type="dataset")
+    try:
+        path = hf_hub_download(REPO, f"checkpoints/history/{RUN}-epoch_{epoch:03d}.pt", repo_type="dataset")
+    except Exception:
+        # Epoch 20 predates the history/ layout.
+        path = hf_hub_download(REPO, f"checkpoints/archive/{RUN}-epoch{epoch:03d}.pt", repo_type="dataset")
     sd = torch.load(path, weights_only=True, map_location="cpu")
     # Older checkpoints name the buffers `.plucker.`; current model uses `.encoder.`.
     sd = {k.replace(".plucker.idx_", ".encoder.idx_"): v for k, v in sd.items()}
