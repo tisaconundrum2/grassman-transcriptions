@@ -1,6 +1,7 @@
-"""Evaluate two checkpoints on the exact same validation shards.
+"""Evaluate several checkpoints on the exact same validation batches.
 
-Usage: compare_val.py <epoch_a> <epoch_b> [max_batches]
+Usage: compare_val.py <epoch> [<epoch> ...]
+Env: MAX_BATCHES (0 = all), VAL_SHARDS (default 1), CODE_ROOT (dir containing Shared/).
 Separates "model got worse" from "validation set changed".
 """
 
@@ -9,8 +10,9 @@ import sys
 
 import torch
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "Transcriptions.Resarch"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "Transcriptions.Resarch", "Train.Ablation"))
+_root = os.environ.get("CODE_ROOT") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Transcriptions.Resarch")
+sys.path.insert(0, _root)
+sys.path.insert(0, os.path.join(_root, "Train.Ablation"))
 
 from huggingface_hub import hf_hub_download
 
@@ -24,31 +26,30 @@ from Shared.services.dataset_service import ShardStreamingDataset, collate_fn
 
 REPO = "tisaconundrum/grassmann-mel-cache"
 RUN = "ablation-1750h-b128"
-EPOCH_A, EPOCH_B = int(sys.argv[1]), int(sys.argv[2])
-MAX_BATCHES = int(sys.argv[3]) if len(sys.argv) > 3 else 40
+EPOCHS = [int(e) for e in sys.argv[1:]]
+MAX_BATCHES = int(os.environ.get("MAX_BATCHES", "0"))
+VAL_SHARDS = int(os.environ.get("VAL_SHARDS", "1"))
 
 shard_repo = make_shard_repository(REPO, "stream")
 shards = shard_repo.list_shards()
 n = len(shards)
 n_train, n_val = int(n * 0.8), max(1, int(n * 0.1))
-val_shards = shards[n_train:n_train + n_val]
-print(f"{n} shards; validation shards = {val_shards[0]} .. {val_shards[-1]} ({len(val_shards)})")
+val_shards = shards[n_train:n_train + n_val][:VAL_SHARDS]
+print(f"{n} shards; scoring on {val_shards}", flush=True)
 
 config = GrassmannConfig(n_layers=6, d_model=256, r_reduced=32,
                          use_seq2seq=False, use_conformer=True,
                          two_sided=True, use_ablation=True)
-tokenizer = CharTokenizer()
-ctrl = ModelController(config, tokenizer, layer_cls=AblationLayer, block_cls=AblationConformerBlock)
+ctrl = ModelController(config, CharTokenizer(), layer_cls=AblationLayer, block_cls=AblationConformerBlock)
 ctrl.build()
 
-ds = ShardStreamingDataset(shard_repo, val_shards[:1], total_samples=5000, shuffle=False)
+ds = ShardStreamingDataset(shard_repo, val_shards, total_samples=5000 * len(val_shards), shuffle=False)
 batches = []
-loader = torch.utils.data.DataLoader(ds, batch_size=32, collate_fn=collate_fn)
-for i, b in enumerate(loader):
-    if i >= MAX_BATCHES:
+for i, b in enumerate(torch.utils.data.DataLoader(ds, batch_size=64, collate_fn=collate_fn)):
+    if MAX_BATCHES and i >= MAX_BATCHES:
         break
     batches.append(b)
-print(f"Cached {len(batches)} batches from {val_shards[0]}")
+print(f"Cached {len(batches)} batches on {ctrl.trainer.device}", flush=True)
 
 
 def evaluate(epoch: int) -> float:
@@ -60,5 +61,6 @@ def evaluate(epoch: int) -> float:
     return ctrl.trainer.validate(batches)
 
 
-for ep in (EPOCH_A, EPOCH_B):
-    print(f"  epoch {ep:3d}: val_loss on identical batches = {evaluate(ep):.4f}")
+print("RESULTS", flush=True)
+for ep in EPOCHS:
+    print(f"  epoch {ep:3d}: val_loss on identical batches = {evaluate(ep):.4f}", flush=True)
