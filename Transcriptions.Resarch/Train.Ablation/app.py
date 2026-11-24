@@ -191,9 +191,11 @@ def main() -> None:
               f"train: {train_loss:.4f}  val: {val_loss:.4f}  "
               f"lr: {lr:.2e}  ({elapsed:.1f}s, total: {total_elapsed/60:.1f}min)"
               f"{mem_str}", flush=True)
+        import math
         metrics_service.log({"epoch": epoch, "epoch/train_loss": train_loss,
-                             "epoch/val_loss": val_loss, "epoch/lr": lr,
-                             "epoch/minutes": elapsed / 60},
+                             "epoch/val_loss": val_loss,
+                             "epoch/log_val_loss": math.log10(max(val_loss, 1e-8)),
+                             "epoch/lr": lr, "epoch/minutes": elapsed / 60},
                             step=model_ctrl.trainer.global_step)
 
         ckpt_svc.upload(epoch, val_loss, trainer=model_ctrl.trainer,

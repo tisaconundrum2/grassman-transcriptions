@@ -28,9 +28,11 @@ import trackio
 
 trackio.init(project="grassmann", name=f"{RUN}-history", space_id=SPACE_ID,
              private=True, resume="allow", config={"source": "backfill", "run": RUN})
+import math
 for epoch in sorted(points):
     val, when = points[epoch]
-    trackio.log({"epoch": epoch, "epoch/val_loss": val}, step=epoch)
+    trackio.log({"epoch": epoch, "epoch/val_loss": val,
+                 "epoch/log_val_loss": math.log10(max(val, 1e-8))}, step=epoch)
     print(f"  epoch {epoch:3d}  val_loss={val:.4f}  ({when:%Y-%m-%d %H:%M})")
 trackio.finish()
 print(f"Dashboard: https://huggingface.co/spaces/{SPACE_ID}")
