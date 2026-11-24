@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 import torch
@@ -7,6 +8,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from Shared.models.config import GrassmannConfig
+from Shared.services import metrics_service
 
 
 @dataclass
@@ -44,6 +46,8 @@ class TrainingService:
         self.scheduler: torch.optim.lr_scheduler.LRScheduler | None = None
         self.ctc_loss = nn.CTCLoss(blank=0, zero_infinity=True)
         self.history: list[TrainMetrics] = []
+        # Set by the app after resume so metric charts continue from the right step.
+        self.global_step = 0
 
         # AMP: mixed precision for faster training on GPU
         self.use_amp = self.device.type == "cuda"
@@ -90,6 +94,8 @@ class TrainingService:
         total_loss = 0.0
         n_batches = 0
         total_batches = len(train_loader)
+        window_start = time.time()
+        last_logged = 0
 
         for batch_idx, (mels, tokens, mel_lengths, token_lengths) in enumerate(train_loader):
             mels = mels.to(self.device)
@@ -113,9 +119,24 @@ class TrainingService:
                 total_loss += loss.item()
                 n_batches += 1
 
+            self.global_step += 1
             if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == total_batches:
                 avg = total_loss / max(n_batches, 1)
                 print(f"    batch {batch_idx+1}/{total_batches}  loss: {avg:.4f}", flush=True)
+                now = time.time()
+                metrics = {
+                    "train/running_loss": avg,
+                    "train/batches_per_sec": (batch_idx + 1 - last_logged) / max(now - window_start, 1e-6),
+                    "train/lr": self.optimizer.param_groups[0]["lr"],
+                    "train/epoch_progress": (batch_idx + 1) / total_batches,
+                }
+                if torch.isfinite(loss):
+                    metrics["train/batch_loss"] = loss.item()
+                if self.device.type == "cuda":
+                    metrics["system/gpu_mem_gb"] = torch.cuda.memory_allocated() / 1e9
+                metrics_service.log(metrics, step=self.global_step)
+                window_start = now
+                last_logged = batch_idx + 1
 
         return total_loss / max(n_batches, 1)
 

@@ -5,3 +5,4 @@ soundfile>=0.12
 torchcodec>=0.1
 sqids>=0.4
 pyyaml>=6.0
+trackio

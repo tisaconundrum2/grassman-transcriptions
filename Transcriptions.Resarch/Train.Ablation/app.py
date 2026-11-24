@@ -29,6 +29,7 @@ from Shared.repositories.dataset_repository import DatasetRepository
 from Shared.repositories.cache_repository import CacheRepository
 from Shared.services.dataset_service import DatasetService
 from Shared.services.checkpoint_service import CheckpointService
+from Shared.services import metrics_service
 
 
 # ── Config (env vars) ────────────────────────────────────────────────────
@@ -156,6 +157,15 @@ def main() -> None:
     start_epoch, _ = ckpt_svc.try_resume(model_ctrl.nn_model, trainer=model_ctrl.trainer)
     best_val_loss = float("inf")
 
+    model_ctrl.trainer.global_step = (start_epoch - 1) * len(train_loader)
+    metrics_service.init(project="grassmann", name=RUN_NAME, config={
+        "model": "ablation", "layers": LAYERS, "d_model": D_MODEL, "r_reduced": R_REDUCED,
+        "batch_size": BATCH_SIZE, "lr": LR, "epochs": EPOCHS, "start_epoch": start_epoch,
+        "cache_repo": CACHE_REPO, "fetch_mode": FETCH_MODE,
+        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
+        "image": os.environ.get("IMAGE_TAG", "unknown"),
+    })
+
     for epoch in range(start_epoch, EPOCHS + 1):
         epoch_start = time.time()
         train_loss = model_ctrl.trainer.train_epoch(train_loader)
@@ -181,6 +191,10 @@ def main() -> None:
               f"train: {train_loss:.4f}  val: {val_loss:.4f}  "
               f"lr: {lr:.2e}  ({elapsed:.1f}s, total: {total_elapsed/60:.1f}min)"
               f"{mem_str}", flush=True)
+        metrics_service.log({"epoch": epoch, "epoch/train_loss": train_loss,
+                             "epoch/val_loss": val_loss, "epoch/lr": lr,
+                             "epoch/minutes": elapsed / 60},
+                            step=model_ctrl.trainer.global_step)
 
         ckpt_svc.upload(epoch, val_loss, trainer=model_ctrl.trainer,
                         model=model_ctrl.nn_model, config=config)
@@ -206,6 +220,9 @@ def main() -> None:
     print(f"  Test loss:     {test_loss:.4f}")
     print(f"  Total time:    {total_time/60:.1f} minutes")
     print(f"{'=' * 60}")
+    metrics_service.log({"final/test_loss": test_loss, "final/best_val_loss": best_val_loss},
+                        step=model_ctrl.trainer.global_step)
+    metrics_service.finish()
 
     model_ctrl.decode_samples(dataset._val_ds, n=5)
     model_ctrl.post_training(SAVE_DIR, run_name=RUN_NAME)
@@ -213,4 +230,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BaseException as e:
+        import traceback
+        metrics_service.alert(f"{RUN_NAME} crashed: {type(e).__name__}", traceback.format_exc()[-3000:])
+        metrics_service.finish()
+        raise
