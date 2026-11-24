@@ -1,0 +1,9 @@
+.git
+.github
+.claude
+.venv
+.env
+demo
+trained
+**/__pycache__
+**/checkpoints

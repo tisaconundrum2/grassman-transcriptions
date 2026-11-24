@@ -85,9 +85,9 @@ class CheckpointService:
                     model.load_state_dict(remapped)
             del state_dict
 
-            # Save locally so training can continue saving to same path
+            # Save locally so upload() finds it on the first epoch.
             os.makedirs(self._save_dir, exist_ok=True)
-            shutil.copy2(local_ckpt, os.path.join(self._save_dir, "best_model.pt"))
+            shutil.copy2(local_ckpt, os.path.join(self._save_dir, "last_model.pt"))
 
             start_epoch = 1
             best_val_loss = float("inf")
@@ -125,6 +125,13 @@ class CheckpointService:
             print(f"  Could not resume checkpoint: {e}", flush=True)
             return 1, float("inf")
 
+    def _save_latest(self, model: torch.nn.Module) -> str:
+        """Save the live model weights to last_model.pt and return the path."""
+        os.makedirs(self._save_dir, exist_ok=True)
+        path = os.path.join(self._save_dir, "last_model.pt")
+        torch.save(model.state_dict(), path)
+        return path
+
     def _archive_epoch(self, epoch: int, val_loss: float,
                        model: torch.nn.Module | None = None,
                        config=None) -> str | None:
@@ -139,7 +146,7 @@ class CheckpointService:
             self._save_dir, "archive", f"{run_prefix}epoch_{epoch:03d}")
         os.makedirs(archive_dir, exist_ok=True)
 
-        local_pt = os.path.join(self._save_dir, "best_model.pt")
+        local_pt = os.path.join(self._save_dir, "last_model.pt")
         if not os.path.isfile(local_pt):
             return None
 
@@ -168,11 +175,14 @@ class CheckpointService:
     def upload(self, epoch: int, val_loss: float, trainer=None,
                model: torch.nn.Module | None = None,
                config=None) -> None:
-        """Upload best_model.pt + metadata (+ trainer state) to HF Dataset repo.
+        """Save and upload the current model weights + metadata to HF.
 
-        If model and config are provided, also archives a per-epoch copy with
-        ONNX export so no checkpoint is ever lost.
+        Saves a fresh last_model.pt from the live model every epoch so the
+        upload always reflects the actual training state.
         """
+        if model is not None:
+            self._save_latest(model)
+
         archive_dir = self._archive_epoch(epoch, val_loss, model=model,
                                           config=config)
         if archive_dir:
@@ -186,7 +196,7 @@ class CheckpointService:
             token = _hf_token()
             api = HfApi(token=token)
 
-            local_pt = os.path.join(self._save_dir, "best_model.pt")
+            local_pt = os.path.join(self._save_dir, "last_model.pt")
             if not os.path.isfile(local_pt):
                 return
 

@@ -201,9 +201,7 @@ def main() -> None:
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            torch.save(model_ctrl.nn_model.state_dict(),
-                       os.path.join(SAVE_DIR, "best_model.pt"))
-            print(f"    -> Saved best model (val_loss={val_loss:.4f})", flush=True)
+            print(f"    -> New best model (val_loss={val_loss:.4f})", flush=True)
 
         if epoch % DECODE_EVERY == 0 or epoch == 1:
             model_ctrl.decode_samples(dataset._val_ds)

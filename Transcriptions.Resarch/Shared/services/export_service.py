@@ -9,6 +9,7 @@ mel spectrogram computation.
 from __future__ import annotations
 
 import math
+import copy
 from pathlib import Path
 
 import torch
@@ -187,7 +188,7 @@ def export_seq2seq(model, config: GrassmannConfig, output_dir: str, opset: int =
 
 
 def export_ctc(model, config: GrassmannConfig, output_dir: str, opset: int = 18) -> None:
-    model = model.cpu()
+    model = copy.deepcopy(model).cpu()
     model.eval()
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -212,7 +213,7 @@ def export_ctc_e2e(model, config: GrassmannConfig, output_dir: str, opset: int =
     which matches the .NET MelTransform exactly. Consumers pass raw 16kHz
     mono float32 audio and get CTC log-probs back — no mel code needed.
     """
-    model = model.cpu()
+    model = copy.deepcopy(model).cpu()
     model.eval()
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
