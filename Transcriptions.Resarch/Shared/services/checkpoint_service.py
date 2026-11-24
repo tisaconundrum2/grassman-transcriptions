@@ -129,7 +129,11 @@ class CheckpointService:
         """Save the live model weights to last_model.pt and return the path."""
         os.makedirs(self._save_dir, exist_ok=True)
         path = os.path.join(self._save_dir, "last_model.pt")
-        torch.save(model.state_dict(), path)
+        # Save to a temp file first, then rename, so a crash mid-write
+        # doesn't corrupt the checkpoint.
+        tmp = path + ".tmp"
+        torch.save(model.state_dict(), tmp)
+        os.replace(tmp, path)
         return path
 
     def _archive_epoch(self, epoch: int, val_loss: float,

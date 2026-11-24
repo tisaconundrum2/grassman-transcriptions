@@ -42,7 +42,8 @@ def alert(title: str, text: str, level: str = "error") -> None:
         return
     try:
         import trackio
-        trackio.alert(title=title, text=text, level=level)
+        lvl = getattr(trackio.alerts.AlertLevel, level.upper(), trackio.alerts.AlertLevel.ERROR)
+        trackio.alert(title=title, text=text, level=lvl)
     except Exception as e:
         print(f"  Trackio alert failed: {e}", flush=True)
 
