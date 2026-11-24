@@ -48,6 +48,7 @@ LAYERS = int(os.environ.get("LAYERS", "6"))
 D_MODEL = int(os.environ.get("D_MODEL", "256"))
 R_REDUCED = int(os.environ.get("R_REDUCED", "32"))
 LR = float(os.environ.get("LR", "3e-4"))
+PATIENCE = int(os.environ.get("PATIENCE", "5"))
 
 
 def _start_health_server(port: int = 7860) -> None:
@@ -156,6 +157,7 @@ def main() -> None:
     assert model_ctrl.nn_model is not None
     start_epoch, _ = ckpt_svc.try_resume(model_ctrl.nn_model, trainer=model_ctrl.trainer)
     best_val_loss = float("inf")
+    patience_counter = 0
 
     model_ctrl.trainer.global_step = (start_epoch - 1) * len(train_loader)
     metrics_service.init(project="grassmann", name=RUN_NAME, config={
@@ -193,6 +195,7 @@ def main() -> None:
               f"{mem_str}", flush=True)
         import math
         metrics_service.log({"epoch": epoch, "epoch/train_loss": train_loss,
+                             "epoch/patience": patience_counter,
                              "epoch/val_loss": val_loss,
                              "epoch/log_val_loss": math.log10(max(val_loss, 1e-8)),
                              "epoch/lr": lr, "epoch/minutes": elapsed / 60},
@@ -203,7 +206,13 @@ def main() -> None:
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            patience_counter = 0
             print(f"    -> New best model (val_loss={val_loss:.4f})", flush=True)
+        else:
+            patience_counter += 1
+            if patience_counter >= PATIENCE:
+                print(f"  Early stopping: val_loss hasn't improved for {PATIENCE} epochs", flush=True)
+                break
 
         if epoch % DECODE_EVERY == 0 or epoch == 1:
             model_ctrl.decode_samples(dataset._val_ds)
