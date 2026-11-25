@@ -38,6 +38,7 @@ _default_cache = ("az://shards/shards/" if os.environ.get("AZ_BLOB_CONNECTION")
                   else "tisaconundrum/grassmann-mel-cache")
 CACHE_REPO = os.environ.get("CACHE_REPO", _default_cache)
 CHECKPOINT_REPO = os.environ.get("CHECKPOINT_REPO", None)
+FRESH_START = os.environ.get("FRESH_START", "").lower() in ("1", "true", "yes")
 RUN_NAME = os.environ.get("RUN_NAME", "ablation")
 EPOCHS = int(os.environ.get("EPOCHS", "50"))
 BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "64"))
@@ -157,7 +158,11 @@ def main() -> None:
     ckpt_repo = CHECKPOINT_REPO or CACHE_REPO
     ckpt_svc = CheckpointService(ckpt_repo, SAVE_DIR, RUN_NAME)
     assert model_ctrl.nn_model is not None
-    start_epoch, _ = ckpt_svc.try_resume(model_ctrl.nn_model, trainer=model_ctrl.trainer)
+    if FRESH_START:
+        print("  FRESH_START=true — skipping checkpoint resume", flush=True)
+        start_epoch = 1
+    else:
+        start_epoch, _ = ckpt_svc.try_resume(model_ctrl.nn_model, trainer=model_ctrl.trainer)
     best_val_loss = float("inf")
     patience_counter = 0
 
