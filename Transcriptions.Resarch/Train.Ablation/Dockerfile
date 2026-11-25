@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir onnxruntime onnxscript
-RUN pip install --no-cache-dir 'datasets<4' librosa soundfile
+RUN pip install --no-cache-dir 'datasets<4' librosa soundfile azure-storage-blob
 
 # Copy shared code + this training app
 COPY Transcriptions.Resarch/Shared/ Shared/

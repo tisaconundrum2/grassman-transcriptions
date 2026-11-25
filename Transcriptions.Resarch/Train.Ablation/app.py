@@ -34,7 +34,9 @@ from Shared.services import metrics_service
 
 # ── Config (env vars) ────────────────────────────────────────────────────
 
-CACHE_REPO = os.environ.get("CACHE_REPO", "tisaconundrum/grassmann-mel-cache")
+_default_cache = ("az://shards/shards/" if os.environ.get("AZ_BLOB_CONNECTION")
+                  else "tisaconundrum/grassmann-mel-cache")
+CACHE_REPO = os.environ.get("CACHE_REPO", _default_cache)
 CHECKPOINT_REPO = os.environ.get("CHECKPOINT_REPO", None)
 RUN_NAME = os.environ.get("RUN_NAME", "ablation")
 EPOCHS = int(os.environ.get("EPOCHS", "50"))

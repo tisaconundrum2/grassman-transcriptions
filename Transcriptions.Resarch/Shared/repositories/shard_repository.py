@@ -268,6 +268,51 @@ class PrefetchTarShardRepository(HubTarShardRepository):
             executor.shutdown(wait=False, cancel_futures=True)
 
 
+class BlobTarShardRepository(IShardRepository):
+    """Downloads .tar shards from Azure Blob Storage with one-ahead prefetch."""
+
+    def __init__(self, connection_string: str, container: str, prefix: str = "shards/"):
+        from azure.storage.blob import ContainerClient
+        self._client = ContainerClient.from_connection_string(connection_string, container)
+        self._prefix = prefix
+
+    def list_shards(self) -> list[str]:
+        return sorted(
+            b.name for b in self._client.list_blobs(name_starts_with=self._prefix)
+            if _is_tar_shard(b.name.rsplit("/", 1)[-1])
+        )
+
+    def total_samples(self) -> int:
+        return len(self.list_shards()) * 5000
+
+    def _download(self, blob_name: str) -> str:
+        tmp = tempfile.mkdtemp()
+        local = os.path.join(tmp, os.path.basename(blob_name))
+        with open(local, "wb") as f:
+            stream = self._client.download_blob(blob_name)
+            stream.readinto(f)
+        return local
+
+    def iter_shards(self, shard_names: list[str]) -> Iterator[list[Sample]]:
+        if not shard_names:
+            return
+        executor = ThreadPoolExecutor(max_workers=1)
+        try:
+            pending: Future = executor.submit(self._download, shard_names[0])
+            for i in range(len(shard_names)):
+                path = pending.result()
+                if i + 1 < len(shard_names):
+                    pending = executor.submit(self._download, shard_names[i + 1])
+                data = _load_tar_shard(path)
+                yield data
+                del data
+                os.unlink(path)
+                os.rmdir(os.path.dirname(path))
+                gc.collect()
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+
 class MultiShardRepository(IShardRepository):
     """Combines multiple shard repositories into one.
 
@@ -316,6 +361,19 @@ FETCH_MODES = ("auto", "local", "stream", "prefetch")
 
 def _make_single_shard_repository(source: str, mode: str) -> IShardRepository:
     """Create a shard repository for a single source path/repo."""
+    # az://<container>/<prefix> → Azure Blob Storage
+    if source.startswith("az://"):
+        conn = os.environ.get("AZ_BLOB_CONNECTION")
+        if not conn:
+            raise ValueError("az:// source requires AZ_BLOB_CONNECTION env var")
+        parts = source[5:].split("/", 1)
+        container = parts[0]
+        prefix = parts[1] if len(parts) > 1 else "shards/"
+        if not prefix.endswith("/"):
+            prefix += "/"
+        print(f"  Using Azure Blob: container={container} prefix={prefix}", flush=True)
+        return BlobTarShardRepository(conn, container, prefix)
+
     resolved = mode
     if resolved == "auto":
         resolved = "local" if os.path.isdir(source) else "prefetch"

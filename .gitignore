@@ -20,3 +20,4 @@ checkpoints/
 onnx_export/
 test_export/
 eval_model/
+training_loss.html
