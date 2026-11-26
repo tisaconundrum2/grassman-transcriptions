@@ -67,3 +67,23 @@ jobs:
             ${{ env.ACR }}/${{ matrix.image }}:latest
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+  deploy-ablation:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Update image and start training job
+        run: |
+          az containerapp job update \
+            -n grassmann-ablation-train \
+            -g fetchit-speech-to-text \
+            --image ${{ env.ACR }}/grassmann-ablation:${{ github.sha }}
+
+          az containerapp job start \
+            -n grassmann-ablation-train \
+            -g fetchit-speech-to-text
