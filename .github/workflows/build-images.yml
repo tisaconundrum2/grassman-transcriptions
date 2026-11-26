@@ -82,7 +82,7 @@ jobs:
           az containerapp job update \
             -n grassmann-ablation-train \
             -g fetchit-speech-to-text \
-            --image ${{ env.ACR }}/grassmann-ablation:${{ github.sha }}
+            --image ${{ env.GHCR }}/${{ github.repository_owner }}/grassmann-ablation:${{ github.sha }}
 
           az containerapp job start \
             -n grassmann-ablation-train \
