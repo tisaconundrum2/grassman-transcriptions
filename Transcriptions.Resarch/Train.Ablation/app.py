@@ -15,6 +15,7 @@ import threading
 import torch
 
 os.environ["PYTHONUNBUFFERED"] = "1"
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 sys.stdout.reconfigure(line_buffering=True)
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, ".."))

@@ -105,19 +105,28 @@ class TrainingService:
 
             self.optimizer.zero_grad()
 
-            with torch.amp.autocast("cuda", enabled=self.use_amp):
-                log_probs = self.model(mels)  # (T', B, vocab)
-                output_lengths = self.model.get_output_lengths(mel_lengths)
-                loss = self.ctc_loss(log_probs, tokens, output_lengths, token_lengths)
+            try:
+                with torch.amp.autocast("cuda", enabled=self.use_amp):
+                    log_probs = self.model(mels)  # (T', B, vocab)
+                    output_lengths = self.model.get_output_lengths(mel_lengths)
+                    loss = self.ctc_loss(log_probs, tokens, output_lengths, token_lengths)
 
-            if torch.isfinite(loss):
-                self.scaler.scale(loss).backward()
-                self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5.0)
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-                total_loss += loss.item()
-                n_batches += 1
+                if torch.isfinite(loss):
+                    self.scaler.scale(loss).backward()
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5.0)
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                    total_loss += loss.item()
+                    n_batches += 1
+            except torch.cuda.OutOfMemoryError:
+                print(f"    [OOM] batch {batch_idx+1}/{total_batches} — skipping", flush=True)
+                # free the failed graph and fragmented blocks
+                del mels, tokens, mel_lengths, token_lengths
+                if 'log_probs' in dir(): del log_probs
+                if 'loss' in dir(): del loss
+                torch.cuda.empty_cache()
+                continue
 
             self.global_step += 1
             if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == total_batches:
@@ -172,6 +181,8 @@ class TrainingService:
     ) -> list[TrainMetrics]:
         for epoch in range(1, epochs + 1):
             train_loss = self.train_epoch(train_loader)
+            if self.device.type == "cuda":
+                torch.cuda.empty_cache()
             val_loss = self.validate(val_loader) if val_loader else None
 
             metrics = TrainMetrics(epoch=epoch, train_loss=train_loss, val_loss=val_loss)
