@@ -3,6 +3,7 @@ name: Build Docker Images
 on:
   push:
     branches: [main]
+    tags: ['train-*']
     paths:
       - Transcriptions.Resarch/**
       - requirements.txt
@@ -67,23 +68,36 @@ jobs:
             ${{ env.ACR }}/${{ matrix.image }}:latest
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
-  deploy-ablation:
+  deploy:
     needs: build
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: startsWith(github.ref, 'refs/tags/train-')
     steps:
       - name: Azure Login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Update image and start training job
+      - name: Determine target job from tag
+        id: target
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          # train-ablation-v1 → grassmann-ablation-train
+          # train-phone-calls-v1 → phone-calls-ablation
+          if [[ "$TAG" == train-phone-calls-* ]]; then
+            echo "job=phone-calls-ablation" >> "$GITHUB_OUTPUT"
+          else
+            echo "job=grassmann-ablation-train" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Update image and start ${{ steps.target.outputs.job }}
         run: |
           az containerapp job update \
-            -n grassmann-ablation-train \
+            -n ${{ steps.target.outputs.job }} \
             -g fetchit-speech-to-text \
             --image ${{ env.GHCR }}/${{ github.repository_owner }}/grassmann-ablation:${{ github.sha }}
 
           az containerapp job start \
-            -n grassmann-ablation-train \
+            -n ${{ steps.target.outputs.job }} \
             -g fetchit-speech-to-text
